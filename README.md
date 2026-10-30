@@ -1,4 +1,8 @@
+<p align="center"><img src="docs/icon.png" width="160" alt="TokTV icon"></p>
+
 # TokTV: TikTok for Fire TV
+
+**[Download the latest APK](https://github.com/Cyberhex1/TokTV/releases/latest)**
 
 A sideload-only TikTok app for Fire TV sticks, built for the remote. It runs tiktok.com in desktop mode (that's what makes Lives play) with a TV control layer on top, plus an optional native Fire TV player for Lives.
 
