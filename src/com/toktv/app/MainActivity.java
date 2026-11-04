@@ -26,6 +26,7 @@ import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -38,6 +39,7 @@ import android.widget.Toast;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.regex.Matcher;
@@ -89,7 +91,8 @@ public class MainActivity extends Activity {
         if (savedInstanceState != null) {
             web.restoreState(savedInstanceState);
         } else {
-            web.loadUrl(data != null ? data.toString() : Prefs.HOME_URL);
+            String start = data != null ? data.toString() : Prefs.HOME_URL;
+            load(start);
         }
         showHint("◀ or ≡  Menu      ▲ ▼  Next video      OK  Pause (twice = Like)      ▶  Buttons", 7000);
     }
@@ -140,6 +143,14 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
+                if (isBlocked(req.getUrl().getHost())) {
+                    return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
+                }
+                return null;
+            }
+
+            @Override
             public void onPageCommitVisible(WebView view, String url) {
                 inject();
             }
@@ -153,7 +164,9 @@ public class MainActivity extends Activity {
             @Override
             public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
                 js("window.__tv&&__tv.onRoute()");
-                checkNativeLive(url);
+                if (checkNativeLive(url)) return;
+                // In-page navigation into or out of LIVE: reload with the right site version.
+                if (applyMode(url)) web.loadUrl(url);
             }
         });
 
@@ -197,6 +210,10 @@ public class MainActivity extends Activity {
                 openNativeLive(m.group(1), null);
                 return true;
             }
+            if (applyMode(url)) {
+                web.loadUrl(url);
+                return true;
+            }
             return false;
         }
         // App deep links (snssdk://, intent://, market://) would try to open the phone app.
@@ -207,13 +224,68 @@ public class MainActivity extends Activity {
         return prefs.nativeLive() && (webOnlyUser == null || !webOnlyUser.equalsIgnoreCase(user));
     }
 
-    private void checkNativeLive(String url) {
-        if (url == null) return;
+    private boolean checkNativeLive(String url) {
+        if (url == null) return false;
         Matcher m = LIVE_ROOM.matcher(url);
         if (m.find() && shouldOpenNative(m.group(1))) {
             js("window.__tv&&__tv.pauseAll()");
             openNativeLive(m.group(1), null);
+            return true;
         }
+        return false;
+    }
+
+    // ---------------------------------------------------------------- Lite mode
+
+    private Boolean desktopMode;
+
+    private static boolean isLiveUrl(String url) {
+        if (url == null) return false;
+        if (LIVE_ROOM.matcher(url).find()) return true;
+        return url.matches("^https?://(?:www\\.)?tiktok\\.com/live(?:[/?#].*)?$");
+    }
+
+    /**
+     * Picks the site version for a URL: in Lite mode the phone site (in a tall centered column)
+     * for everything except LIVE, which needs the desktop site. Returns true if the user agent
+     * changed, meaning the page must be (re)loaded.
+     */
+    private boolean applyMode(String url) {
+        boolean desktop = !prefs.liteMode() || isLiveUrl(url);
+        if (desktopMode != null && desktopMode == desktop) return false;
+        boolean changed = desktopMode != null;
+        desktopMode = desktop;
+        web.getSettings().setUserAgentString(desktop ? Prefs.DESKTOP_UA : Prefs.MOBILE_UA);
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int screenH = getResources().getDisplayMetrics().heightPixels;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) web.getLayoutParams();
+        if (desktop) {
+            lp.width = -1;
+            appliedScale = prefs.uiScale();
+        } else {
+            lp.width = Math.min(screenW, (int) (screenH * 0.75f));
+            // About 420 CSS pixels across: a phone-sized page, scaled up to fill the column.
+            appliedScale = Math.max(100, Math.round(lp.width / 420f * 100));
+        }
+        lp.gravity = Gravity.CENTER_HORIZONTAL;
+        web.setLayoutParams(lp);
+        web.setInitialScale(appliedScale);
+        return changed;
+    }
+
+    /** Trackers, analytics and ad hosts: blocking them saves a lot of CPU on slow sticks. */
+    private static boolean isBlocked(String host) {
+        if (host == null) return false;
+        host = host.toLowerCase();
+        if (host.endsWith("tiktokv.com") || host.endsWith("byteoversea.com") || host.endsWith("tiktokv.us")
+                || host.endsWith("tiktokv.eu")) {
+            return host.startsWith("mon") || host.startsWith("mcs") || host.startsWith("log")
+                    || host.contains("slardar") || host.contains("-mon.");
+        }
+        return host.equals("analytics.tiktok.com") || host.startsWith("ads.") || host.contains("slardar")
+                || host.endsWith("google-analytics.com") || host.endsWith("googletagmanager.com")
+                || host.endsWith("doubleclick.net") || host.endsWith("googlesyndication.com")
+                || host.endsWith("facebook.net") || host.endsWith("connect.facebook.com");
     }
 
     private boolean injectPending;
@@ -295,13 +367,13 @@ public class MainActivity extends Activity {
                 String url = "https://www.tiktok.com/@" + fallback + "/live";
                 Matcher m = LIVE_ROOM.matcher(String.valueOf(web.getUrl()));
                 if (m.find() && m.group(1).equalsIgnoreCase(fallback)) js("window.__tv&&__tv.resumeAll()");
-                else web.loadUrl(url);
+                else load(url);
                 toast("Playing in the website player");
             } else {
                 String url = String.valueOf(web.getUrl());
                 if (LIVE_ROOM.matcher(url).find()) {
                     if (web.canGoBack()) web.goBack();
-                    else web.loadUrl("https://www.tiktok.com/live");
+                    else load("https://www.tiktok.com/live");
                 }
             }
         } else if (requestCode == REQ_SETTINGS) {
@@ -311,15 +383,16 @@ public class MainActivity extends Activity {
 
     private void applySettings() {
         js("window.__tv&&__tv.setSettings(" + settingsJson() + ")");
-        if (prefs.uiScale() != appliedScale) {
-            appliedScale = prefs.uiScale();
-            web.setInitialScale(appliedScale);
-            web.reload();
-        }
+        String cur = String.valueOf(web.getUrl());
+        desktopMode = null;
+        int before = appliedScale;
+        boolean wasDesktop = Prefs.DESKTOP_UA.equals(web.getSettings().getUserAgentString());
+        applyMode(cur);
+        if (appliedScale != before || wasDesktop != desktopMode) web.loadUrl(cur);
         if (!prefs.nativeLive()) webOnlyUser = null;
         if ("1".equals(prefs.get("needs_reload", "0"))) {
             prefs.put("needs_reload", "0");
-            web.loadUrl(Prefs.HOME_URL);
+            load(Prefs.HOME_URL);
         }
     }
 
@@ -472,6 +545,12 @@ public class MainActivity extends Activity {
 
     private void go(String url) {
         webOnlyUser = null;
+        load(url);
+    }
+
+    /** Loads a URL with the right site version (phone or desktop) for it. */
+    private void load(String url) {
+        applyMode(url);
         web.loadUrl(url);
     }
 
@@ -565,7 +644,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        if (intent != null && intent.getData() != null) web.loadUrl(intent.getData().toString());
+        if (intent != null && intent.getData() != null) load(intent.getData().toString());
     }
 
     @Override
@@ -625,7 +704,7 @@ public class MainActivity extends Activity {
             ui.post(new Runnable() {
                 public void run() {
                     if (shouldOpenNative(user)) openNativeLive(user, streamJson);
-                    else web.loadUrl("https://www.tiktok.com/@" + user + "/live");
+                    else load("https://www.tiktok.com/@" + user + "/live");
                 }
             });
         }

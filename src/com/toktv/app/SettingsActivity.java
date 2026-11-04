@@ -43,6 +43,8 @@ public class SettingsActivity extends Activity {
         title.setPadding(dp(16), 0, 0, dp(24));
         list.addView(title);
 
+        option("Lite mode (faster)", "Uses TikTok's lighter phone site for videos, shown in a tall column. LIVE still uses the full site. Turn off for the full desktop layout.",
+                "lite_mode", "1", Prefs.ONOFF);
         option("LIVE player", "Website player has chat, gifts and comments. Native player is smoother on older Fire TV sticks.",
                 "live_player", Prefs.PLAYER_WEB, Prefs.PLAYER_OPTIONS);
         option("Native player quality", "Menu (≡) in the native player also changes this.",
@@ -61,7 +63,7 @@ public class SettingsActivity extends Activity {
         });
 
         TextView about = new TextView(this);
-        about.setText("TokTV 1.0 · sideload build");
+        about.setText("TokTV 1.1 · sideload build");
         about.setTextColor(Color.GRAY);
         about.setTextSize(14);
         about.setPadding(dp(16), dp(24), 0, 0);

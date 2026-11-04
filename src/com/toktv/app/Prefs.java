@@ -9,6 +9,11 @@ public final class Prefs {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             + "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
+    /** Phone user agent: TikTok's mobile site is far lighter, which matters on older sticks. */
+    public static final String MOBILE_UA =
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
+            + "(KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36";
+
     public static final String HOME_URL = "https://www.tiktok.com/foryou";
 
     // Live player modes
@@ -61,6 +66,7 @@ public final class Prefs {
     }
     public boolean autoUnmute() { return "1".equals(get("auto_unmute", "1")); }
     public boolean nativeChat() { return "1".equals(get("native_chat", "1")); }
+    public boolean liteMode() { return "1".equals(get("lite_mode", "1")); }
     public boolean hidePromos() { return "1".equals(get("hide_promos", "1")); }
 
     public static String labelFor(String[][] opts, String value) {
