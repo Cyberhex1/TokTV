@@ -24,7 +24,7 @@ rm -rf "$OUT" && mkdir -p "$OUT"/{res,gen,classes}
 aapt2 compile --dir res -o "$OUT/res/compiled.zip"
 aapt2 link -o "$OUT/unsigned.apk" -I "$ANDROID_JAR" --manifest AndroidManifest.xml \
   -A assets --java "$OUT/gen" --min-sdk-version 22 --target-sdk-version 30 \
-  --version-code 6 --version-name 2.3 "$OUT/res/compiled.zip"
+  --version-code 7 --version-name 2.4 "$OUT/res/compiled.zip"
 
 javac -nowarn -encoding UTF-8 -source 8 -target 8 -bootclasspath "$ANDROID_JAR" -classpath "$ANDROID_JAR:$JARS" \
   -d "$OUT/classes" $(find src "$OUT/gen" -name '*.java') 2>&1 | grep -v "bootstrap class path\|^warning\|^1 warning\|options.*obsolete\|To suppress\|^Note:" || true

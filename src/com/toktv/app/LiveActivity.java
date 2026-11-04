@@ -88,6 +88,14 @@ public class LiveActivity extends Activity {
     private int streamAttempt;
     private boolean failed;
     private Pointer pointer;
+    /** This load already re-checked the room with a fresh lookup (no cache). */
+    private boolean rechecked;
+    /** Moving on by itself after a LIVE ended: skip offline rooms quietly. */
+    private boolean autoNext;
+    private int autoTries;
+    private String endedFrom;
+    private final java.util.Set<String> offline = new java.util.HashSet<>();
+    private static final long STALL_MS = 15000;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -147,12 +155,10 @@ public class LiveActivity extends Activity {
         video.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
             @Override
             public void onPrepared(MediaPlayer mp) {
-                new Picks(prefs).markWatched(user);
-                spinner.setVisibility(View.GONE);
-                status.setVisibility(View.GONE);
                 mp.setLooping(false);
                 video.start();
-                showInfo();
+                rechecked = false;
+                onPlaying();
             }
         });
         video.setOnErrorListener(new MediaPlayer.OnErrorListener() {
@@ -165,16 +171,21 @@ public class LiveActivity extends Activity {
         video.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
             @Override
             public void onCompletion(MediaPlayer mp) {
-                // A Live "completes" when it ends or the connection drops. Reload once to check.
-                load(user);
+                // A Live "completes" when it ends or the connection drops. Check the room again.
+                recheck();
             }
         });
         video.setOnInfoListener(new MediaPlayer.OnInfoListener() {
             @Override
             public boolean onInfo(MediaPlayer mp, int what, int extra) {
-                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) spinner.setVisibility(View.VISIBLE);
-                else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END || what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START)
+                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                    spinner.setVisibility(View.VISIBLE);
+                    ui.removeCallbacks(stallCheck);
+                    ui.postDelayed(stallCheck, STALL_MS);
+                } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END || what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
                     spinner.setVisibility(View.GONE);
+                    ui.removeCallbacks(stallCheck);
+                }
                 return false;
             }
         });
@@ -275,24 +286,36 @@ public class LiveActivity extends Activity {
     // ---------------------------------------------------------------- Loading
 
     private void load(final String u) {
+        load(u, false);
+    }
+
+    /** User-started load: stops any automatic moving-on. */
+    private void loadManual(String u) {
+        autoNext = false;
+        load(u, false);
+    }
+
+    private void load(final String u, final boolean fresh) {
         user = u;
         failed = false;
+        rechecked = fresh;
         final int token = ++loadToken;
         stopPlayback();
+        ui.removeCallbacks(stallCheck);
         infoName.setText("@" + u);
         infoTitle.setText("");
         infoViewers.setText("");
         showInfo();
-        setStatus("Opening @" + u + "'s LIVE…", true);
+        setStatus(autoNext ? "LIVE ended. Opening @" + u + "…" : "Opening @" + u + "'s LIVE…", true);
         if (chatPanel != null) chatPanel.switchTo(u);
         if (speakers != null) speakers.clear();
 
-        final String page = pageStream;
+        final String page = fresh ? null : pageStream;
         pageStream = null;   // only valid for the first Live we were opened with
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final Result r = resolve(u, page);
+                final Result r = resolve(u, page, fresh);
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
@@ -317,7 +340,110 @@ public class LiveActivity extends Activity {
     void remoteWatch(String u) {
         if (!containsIgnoreCase(lives, u)) lives.add(index + 1, u);
         for (int i = 0; i < lives.size(); i++) if (lives.get(i).equalsIgnoreCase(u)) index = i;
-        load(u);
+        loadManual(u);
+    }
+
+    // ---------------------------------------------------------------- LIVE ended
+
+    /**
+     * The stream ended, stalled or failed: look the room up again without any cached data.
+     * Ended → move on to the next LIVE; still live → try its fresh stream URLs once.
+     */
+    private void recheck() {
+        if (rechecked) {
+            showFailure();
+            return;
+        }
+        final String u = user;
+        final int token = ++loadToken;
+        rechecked = true;
+        stopPlayback();
+        ui.removeCallbacks(stallCheck);
+        setStatus(null, true);
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final Result r = resolve(u, null, true);
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (token != loadToken || isFinishing()) return;
+                        if (!r.live) {
+                            onLiveEnded();
+                        } else if (!r.hls.isEmpty()) {
+                            streamUrls = r.hls;
+                            streamAttempt = 0;
+                            play(streamUrls.get(0));
+                        } else {
+                            showFailure();
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void onLiveEnded() {
+        offline.add(user.toLowerCase());
+        if (!autoNext) {
+            autoNext = true;
+            autoTries = 0;
+            endedFrom = user;
+            toast("@" + user + "'s LIVE ended");
+        }
+        playNextLive();
+    }
+
+    /** Next LIVE in the list the user opened this from, skipping rooms already found offline. */
+    private void playNextLive() {
+        for (int step = 1; step < lives.size() && autoTries < lives.size(); step++) {
+            int i = (index + step) % lives.size();
+            String u = lives.get(i);
+            if (offline.contains(u.toLowerCase())) continue;
+            autoTries++;
+            index = i;
+            load(u, false);
+            return;
+        }
+        autoNext = false;
+        failed = false;
+        stopPlayback();
+        setStatus("@" + (endedFrom != null ? endedFrom : user) + "'s LIVE ended.\nNo other LIVEs in this list are on right now. Back to exit.", false);
+    }
+
+    private final Runnable stallCheck = new Runnable() {
+        @Override
+        public void run() { recheck(); }
+    };
+
+    private void showFailure() {
+        autoNext = false;
+        failed = true;
+        stopPlayback();
+        ui.removeCallbacks(stallCheck);
+        setStatus("Couldn't play this LIVE in the Fire TV player.\nPress OK to watch it in the website player.", false);
+    }
+
+    private void onPlaying() {
+        new Picks(prefs).markWatched(user);
+        ui.removeCallbacks(stallCheck);
+        autoNext = false;
+        autoTries = 0;
+        offline.remove(user.toLowerCase());
+        spinner.setVisibility(View.GONE);
+        status.setVisibility(View.GONE);
+        showInfo();
+    }
+
+    /** HTTP 404/410 from the stream server: the stream is gone, no point trying other qualities. */
+    private static boolean isGone(Throwable t) {
+        for (int d = 0; t != null && d < 8; d++, t = t.getCause()) {
+            if (t instanceof com.google.android.exoplayer2.upstream.HttpDataSource.InvalidResponseCodeException) {
+                int c = ((com.google.android.exoplayer2.upstream.HttpDataSource.InvalidResponseCodeException) t).responseCode;
+                return c == 404 || c == 410;
+            }
+        }
+        return false;
     }
 
     private void onResolved(Result r) {
@@ -328,6 +454,11 @@ public class LiveActivity extends Activity {
         if (r.title != null) infoTitle.setText(r.title);
         if (r.viewers > 0) infoViewers.setText(formatCount(r.viewers) + " watching");
         if (!r.live) {
+            if (autoNext) {   // moving on after a LIVE ended: skip rooms that are offline
+                onLiveEnded();
+                return;
+            }
+            offline.add(user.toLowerCase());
             failed = true;
             setStatus("@" + user + " isn't LIVE right now.\n▲ ▼ to try another LIVE, Back to exit.", false);
             return;
@@ -372,20 +503,21 @@ public class LiveActivity extends Activity {
                 @Override
                 public void onPlaybackStateChanged(int state) {
                     if (state == Player.STATE_READY) {
-                        new Picks(prefs).markWatched(user);
-                        spinner.setVisibility(View.GONE);
-                        status.setVisibility(View.GONE);
-                        showInfo();
+                        rechecked = false;
+                        onPlaying();
                     } else if (state == Player.STATE_BUFFERING) {
                         spinner.setVisibility(View.VISIBLE);
+                        ui.removeCallbacks(stallCheck);
+                        ui.postDelayed(stallCheck, STALL_MS);
                     } else if (state == Player.STATE_ENDED) {
-                        load(user);   // ended or dropped: check again
+                        recheck();   // end of stream: ended, or just dropped?
                     }
                 }
 
                 @Override
                 public void onPlayerError(PlaybackException error) {
-                    tryNextStream();
+                    if (isGone(error)) recheck();
+                    else tryNextStream();
                 }
 
                 @Override
@@ -471,9 +603,7 @@ public class LiveActivity extends Activity {
             play(streamUrls.get(streamAttempt));
             return;
         }
-        failed = true;
-        stopPlayback();
-        setStatus("Couldn't play this LIVE in the Fire TV player.\nPress OK to watch it in the website player.", false);
+        recheck();   // all URLs failed: has the LIVE ended? (shows the error if it's still on)
     }
 
     private static String formatCount(long n) {
@@ -486,15 +616,18 @@ public class LiveActivity extends Activity {
 
     static class Result {
         boolean live;
+        /** TikTok said the room is over (status other than 2 = live). */
+        boolean ended;
         String nickname, title;
         long viewers;
         List<String> hls = new ArrayList<>();
     }
 
-    private Result resolve(String u, String pageJson) {
+    /** fresh: skip the home screen's cached room data and ask TikTok now (used after a stream ends). */
+    private Result resolve(String u, String pageJson, boolean fresh) {
         Result r = new Result();
         // 0) Stream data from the LIVE list the home screen already loaded.
-        Feed.Room fr = Feed.find(u);
+        Feed.Room fr = fresh || offline.contains(u.toLowerCase()) ? null : Feed.find(u);
         if (fr != null && System.currentTimeMillis() - fr.at < 10 * 60 * 1000) {
             r.nickname = fr.nick;
             r.title = emptyToNull(fr.title);
@@ -534,6 +667,7 @@ public class LiveActivity extends Activity {
                 if (data != null) {
                     int st = data.optInt("status", 0);
                     if (st == 2) r.live = true;
+                    else if (st == 4) r.ended = true;   // 4 = finished (3 = host paused, keep waiting)
                     if (r.title == null) r.title = emptyToNull(data.optString("title"));
                     if (r.viewers == 0) r.viewers = data.optLong("user_count", 0);
                     JSONObject owner = data.optJSONObject("owner");
@@ -553,7 +687,10 @@ public class LiveActivity extends Activity {
             } catch (Exception ignored) {
             }
         }
-        if (!r.hls.isEmpty()) r.live = true;
+        if (r.ended) {   // leftover stream URLs of an ended room just 404
+            r.live = false;
+            r.hls.clear();
+        } else if (!r.hls.isEmpty()) r.live = true;
         return r;
     }
 
@@ -567,7 +704,9 @@ public class LiveActivity extends Activity {
         JSONObject room = o.optJSONObject("liveRoom");
         if (room == null) return;
         r.title = emptyToNull(room.optString("title"));
-        if (room.optInt("status", 0) == 2) r.live = true;
+        int st = room.optInt("status", 0);
+        if (st == 2) r.live = true;
+        else if (st == 4) r.ended = true;   // 4 = finished (3 = host paused, keep waiting)
         JSONObject stats = room.optJSONObject("liveRoomStats");
         if (stats != null) r.viewers = stats.optLong("userCount", 0);
         JSONObject sd = room.optJSONObject("streamData");
@@ -695,7 +834,7 @@ public class LiveActivity extends Activity {
             return;
         }
         index = (index + dir + lives.size()) % lives.size();
-        load(lives.get(index));
+        loadManual(lives.get(index));
     }
 
     private void cycleQuality() {
@@ -706,7 +845,7 @@ public class LiveActivity extends Activity {
         String[] next = opts[(i + 1) % opts.length];
         prefs.put("quality", next[0]);
         toast("Quality: " + next[1]);
-        load(user);
+        loadManual(user);
     }
 
     private void fallbackToWeb() {
@@ -768,6 +907,7 @@ public class LiveActivity extends Activity {
         super.onPause();
         if (current == this) current = null;
         paused = true;
+        ui.removeCallbacks(stallCheck);
         stopPlayback();
     }
 
