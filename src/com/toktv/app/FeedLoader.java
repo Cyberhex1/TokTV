@@ -137,7 +137,7 @@ public final class FeedLoader {
     }
 
     /** Video, images, chat and trackers: none of it is needed to get the lists. */
-    private static boolean isHeavy(String host, String url) {
+    static boolean isHeavy(String host, String url) {
         String path = url.split("\\?")[0].toLowerCase();
         if (host.startsWith("pull-") || host.contains("-pull") || host.startsWith("v16") || host.startsWith("v19")
                 || host.startsWith("v77") || host.contains("webcast-") && host.contains("cdn")) return true;
@@ -151,6 +151,21 @@ public final class FeedLoader {
     }
 
     private WebResourceResponse proxyFeed(WebResourceRequest r, final boolean isFollow) {
+        String[] body = new String[1];
+        WebResourceResponse resp = proxy(r, body);
+        final List<Feed.Room> rooms = body[0] == null ? null : Feed.parse(body[0]);
+        ui.post(new Runnable() {
+            @Override
+            public void run() { onList(isFollow, rooms); }
+        });
+        return resp;
+    }
+
+    /**
+     * Makes the page's own request for it (same URL, headers and cookies), keeps a copy of the
+     * answer in bodyOut[0] and returns it to the page. Runs on the WebView's network thread.
+     */
+    static WebResourceResponse proxy(WebResourceRequest r, String[] bodyOut) {
         try {
             String url = r.getUrl().toString();
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
@@ -176,11 +191,7 @@ public final class FeedLoader {
             String ctype = c.getContentType();
             c.disconnect();
             final byte[] body = out.toByteArray();
-            final List<Feed.Room> rooms = Feed.parse(new String(body, "UTF-8"));
-            ui.post(new Runnable() {
-                @Override
-                public void run() { onList(isFollow, rooms); }
-            });
+            bodyOut[0] = new String(body, "UTF-8");
             Map<String, String> headers = new HashMap<>();
             headers.put("Access-Control-Allow-Origin", "https://www.tiktok.com");
             headers.put("Access-Control-Allow-Credentials", "true");
@@ -206,7 +217,7 @@ public final class FeedLoader {
         }
     }
 
-    private static WebResourceResponse empty() {
+    static WebResourceResponse empty() {
         return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
     }
 }

@@ -472,7 +472,7 @@ public class LiveActivity extends Activity {
         Result r = new Result();
         // 0) Stream data from the LIVE list the home screen already loaded.
         Feed.Room fr = Feed.find(u);
-        if (fr != null && System.currentTimeMillis() - Feed.updatedAt < 10 * 60 * 1000) {
+        if (fr != null && System.currentTimeMillis() - fr.at < 10 * 60 * 1000) {
             r.nickname = fr.nick;
             r.title = emptyToNull(fr.title);
             r.viewers = fr.viewers;

@@ -29,6 +29,7 @@ Menu > **Log in (QR code)**, then scan the code with the TikTok app on your phon
 | Hold OK, or ≡ (Menu) on a card | Pin to top / Unpin, Sort |
 | ≡ (Menu) | Pin, Sort (TikTok's order, Recently watched, Most viewers, Name A–Z), Refresh, Free mouse, website screens, Log in, Settings |
 | ⏯ | Refresh the list (it also refreshes every 3 minutes) |
+| 🔍 Search (top of the list, ≡ → Search) | Type a name, @username or topic. Matches in your lists show instantly; OK asks TikTok for LIVEs and accounts. Offline accounts can be pinned. The Fire TV phone app's keyboard works here. |
 | Back | Press twice to exit |
 
 Pinned creators get their own row at the top; when they're offline they stay there, dimmed. "Recently watched" counts LIVEs watched on this TV (TikTok's website doesn't share LIVE watch history from other devices).

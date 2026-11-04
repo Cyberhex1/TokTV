@@ -11,7 +11,10 @@ import java.util.Map;
 /** LIVE rooms read from TikTok's LIVE feed responses, kept in memory for the home screen and player. */
 public final class Feed {
     public static final class Room {
-        public String user, nick, title, avatar, roomId, streamData, hls;
+        public String user, nick, title, avatar, cover, roomId, streamData, hls;
+        public boolean live = true;
+        public long followers;
+        public final long at = System.currentTimeMillis();
         public long viewers;
     }
 
@@ -23,6 +26,13 @@ public final class Feed {
     private Feed() { }
 
     public static synchronized Room find(String user) {
+        if (user == null) return null;
+        Room r = byUser.get(user.toLowerCase());
+        return r != null ? r : extra.get(user.toLowerCase());
+    }
+
+    /** Only rooms in the Following/Suggested lists (not search results). */
+    public static synchronized Room findListed(String user) {
         return user == null ? null : byUser.get(user.toLowerCase());
     }
 
@@ -64,39 +74,55 @@ public final class Feed {
             if (data == null) return o.has("status_code") ? out : null;
             for (int i = 0; i < data.length(); i++) {
                 JSONObject item = data.optJSONObject(i);
-                JSONObject room = item == null ? null : item.optJSONObject("data");
-                if (room == null) continue;
-                JSONObject owner = room.optJSONObject("owner");
-                if (owner == null) continue;
-                Room r = new Room();
-                r.user = owner.optString("display_id", "");
-                if (r.user.length() == 0) continue;
-                r.nick = owner.optString("nickname", r.user);
-                r.title = room.optString("title", "");
-                r.viewers = room.optLong("user_count", 0);
-                r.roomId = room.optString("id_str", "");
-                r.avatar = pickUrl(owner.optJSONObject("avatar_thumb"));
-                JSONObject su = room.optJSONObject("stream_url");
-                if (su != null) {
-                    JSONObject core = su.optJSONObject("live_core_sdk_data");
-                    JSONObject pull = core == null ? null : core.optJSONObject("pull_data");
-                    if (pull != null) r.streamData = pull.optString("stream_data", null);
-                    JSONObject map = su.optJSONObject("hls_pull_url_map");
-                    if (map != null) {
-                        for (String k : new String[]{"FULL_HD1", "HD1", "SD1", "SD2"}) {
-                            String u = map.optString(k, "");
-                            if (u.startsWith("http")) { r.hls = u; break; }
-                        }
-                    }
-                    if (r.hls == null && su.optString("hls_pull_url", "").startsWith("http")) r.hls = su.optString("hls_pull_url");
-                }
-                if (!contains(out, r.user)) out.add(r);
+                Room r = parseRoom(item == null ? null : item.optJSONObject("data"));
+                if (r != null && !contains(out, r.user)) out.add(r);
             }
             return out;
         } catch (Exception e) {
             return null;
         }
     }
+
+    /** One LIVE room object (as found in the LIVE feeds and in LIVE search results). */
+    public static Room parseRoom(JSONObject room) {
+        if (room == null) return null;
+        JSONObject owner = room.optJSONObject("owner");
+        if (owner == null) return null;
+        Room r = new Room();
+        r.user = owner.optString("display_id", "");
+        if (r.user.length() == 0) return null;
+        r.nick = owner.optString("nickname", r.user);
+        r.title = room.optString("title", "");
+        r.viewers = room.optLong("user_count", 0);
+        r.roomId = room.optString("id_str", "");
+        r.avatar = pickUrl(owner.optJSONObject("avatar_thumb"));
+        r.cover = pickUrl(room.optJSONObject("cover"));
+        JSONObject su = room.optJSONObject("stream_url");
+        if (su != null) {
+            JSONObject core = su.optJSONObject("live_core_sdk_data");
+            JSONObject pull = core == null ? null : core.optJSONObject("pull_data");
+            if (pull != null) r.streamData = pull.optString("stream_data", null);
+            JSONObject map = su.optJSONObject("hls_pull_url_map");
+            if (map != null) {
+                for (String k : new String[]{"FULL_HD1", "HD1", "SD1", "SD2"}) {
+                    String u = map.optString(k, "");
+                    if (u.startsWith("http")) { r.hls = u; break; }
+                }
+            }
+            if (r.hls == null && su.optString("hls_pull_url", "").startsWith("http")) r.hls = su.optString("hls_pull_url");
+        }
+        return r;
+    }
+
+    /** Makes rooms found elsewhere (search) playable by name without adding them to the lists. */
+    public static synchronized void remember(List<Room> rooms) {
+        for (Room r : rooms) {
+            String k = r.user.toLowerCase();
+            if (!byUser.containsKey(k) || extra.containsKey(k)) extra.put(k, r);
+        }
+    }
+
+    private static final Map<String, Room> extra = new HashMap<>();
 
     private static String pickUrl(JSONObject img) {
         if (img == null) return null;

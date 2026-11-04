@@ -157,6 +157,11 @@ public class HomeActivity extends Activity {
             status.setText("");
         }
 
+        View sb = button("🔍  Search LIVEs and accounts", new Runnable() {
+            public void run() { openSearch(); }
+        });
+        sb.setTag("#search");
+
         if (!loggedIn) {
             section("Log in to see who you follow that's LIVE");
             View b = button("Log in with QR code", new Runnable() {
@@ -170,7 +175,7 @@ public class HomeActivity extends Activity {
         List<String> pins = picks.pinned();
         List<Feed.Room> pinLive = new ArrayList<>(), pinOff = new ArrayList<>();
         for (String u : pins) {
-            Feed.Room r = Feed.find(u);
+            Feed.Room r = Feed.findListed(u);
             if (r != null) pinLive.add(r);
             else {
                 Feed.Room off = new Feed.Room();
@@ -394,6 +399,11 @@ public class HomeActivity extends Activity {
                 .show();
     }
 
+    private void openSearch() {
+        if (loader != null) { loader.cancel(); loader = null; spinner.setVisibility(View.GONE); }
+        startActivity(new Intent(this, SearchActivity.class));
+    }
+
     private void openLogin() {
         startActivityForResult(new Intent(this, LoginActivity.class), REQ_LOGIN);
     }
@@ -434,7 +444,7 @@ public class HomeActivity extends Activity {
         final String[] items = {
                 "Refresh",
                 "Free mouse: " + (pointer.isOn() ? "On" : "Off"),
-                "Search LIVE (website)",
+                "Search",
                 "LIVE page (website)",
                 "TikTok videos (website)",
                 loggedIn ? "Log in again (QR code)" : "Log in (QR code)",
@@ -449,7 +459,7 @@ public class HomeActivity extends Activity {
                         switch (which) {
                             case 0: refresh(); break;
                             case 1: setMouse(!pointer.isOn()); break;
-                            case 2: openWebsite("https://www.tiktok.com/search/live?q="); break;
+                            case 2: openSearch(); break;
                             case 3: openWebsite("https://www.tiktok.com/live"); break;
                             case 4: openWebsite(Prefs.HOME_URL); break;
                             case 5: openLogin(); break;
@@ -496,6 +506,10 @@ public class HomeActivity extends Activity {
                     toast("Press Back again to exit");
                 }
             }
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_SEARCH) {
+            if (!down) openSearch();
             return true;
         }
         if (code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && down && e.getRepeatCount() == 0) {

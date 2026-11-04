@@ -37,6 +37,13 @@
         </activity>
 
         <activity
+            android:name=".SearchActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:windowSoftInputMode="adjustNothing|stateVisible"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode" />
+
+        <activity
             android:name=".LoginActivity"
             android:exported="false"
             android:screenOrientation="landscape"
