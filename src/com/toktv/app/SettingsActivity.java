@@ -43,14 +43,15 @@ public class SettingsActivity extends Activity {
         title.setPadding(dp(16), 0, 0, dp(24));
         list.addView(title);
 
-        option("Lite mode (faster)", "Uses TikTok's lighter phone site for videos, shown in a tall column. LIVE still uses the full site. Turn off for the full desktop layout.",
+        option("Lite mode (faster)", "For the TikTok website screens: uses the lighter phone site for videos. LIVE still uses the full site.",
                 "lite_mode", "1", Prefs.ONOFF);
-        option("LIVE player", "Website player has chat, gifts and comments. Native player is smoother on older Fire TV sticks.",
-                "live_player", Prefs.PLAYER_WEB, Prefs.PLAYER_OPTIONS);
+        option("LIVE player on website screens", "LIVEs opened from the TikTok website screens. The LIVE list always uses the native player.",
+                "live_player", Prefs.PLAYER_NATIVE, Prefs.PLAYER_OPTIONS);
         option("Native player quality", "Menu (≡) in the native player also changes this.",
                 "quality", "auto", Prefs.QUALITY_OPTIONS);
         option("Chat in native player", "Press ▶ while watching to show chat beside the video.",
                 "native_chat", "1", Prefs.ONOFF);
+        option("Free mouse", "A pointer you move with the arrows; OK clicks. Also in ≡ menus.", "mouse", "0", Prefs.ONOFF);
         option("Text and layout size", "How big tiktok.com looks on the TV.",
                 "ui_scale", "150", Prefs.SIZE_OPTIONS);
         option("Turn sound on automatically", "TikTok starts some videos muted. This unmutes them.",
@@ -63,7 +64,7 @@ public class SettingsActivity extends Activity {
         });
 
         TextView about = new TextView(this);
-        about.setText("TokTV 1.1 · sideload build");
+        about.setText("TokTV 2.1 LIVE · sideload build");
         about.setTextColor(Color.GRAY);
         about.setTextSize(14);
         about.setPadding(dp(16), dp(24), 0, 0);

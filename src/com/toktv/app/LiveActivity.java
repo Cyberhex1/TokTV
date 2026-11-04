@@ -1,6 +1,8 @@
 package com.toktv.app;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -25,6 +27,17 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.VideoView;
+import android.view.SurfaceView;
+import com.google.android.exoplayer2.DefaultLoadControl;
+import com.google.android.exoplayer2.ExoPlayer;
+import com.google.android.exoplayer2.MediaItem;
+import com.google.android.exoplayer2.PlaybackException;
+import com.google.android.exoplayer2.Player;
+import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory;
+import com.google.android.exoplayer2.source.MediaSource;
+import com.google.android.exoplayer2.source.ProgressiveMediaSource;
+import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
+import com.google.android.exoplayer2.video.VideoSize;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -45,7 +58,12 @@ import java.util.Map;
  * Up/Down switches between Lives, Right shows chat, Back returns to the app.
  */
 public class LiveActivity extends Activity {
-    private static final String[] QUALITY_ORDER = {"origin", "uhd", "hd", "sd", "ld"};
+    /** "Auto": 720p first — smooth on Fire TV sticks — then the rest. */
+    private static final String[] QUALITY_ORDER = {"hd", "hd_60", "sd", "uhd", "uhd_60", "origin", "ld"};
+    private ExoPlayer exo;
+    private SurfaceView surface;
+    private FrameLayout videoBox;
+    private int videoW, videoH;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private Prefs prefs;
@@ -65,6 +83,7 @@ public class LiveActivity extends Activity {
     private List<String> streamUrls = new ArrayList<>();
     private int streamAttempt;
     private boolean failed;
+    private Pointer pointer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -105,11 +124,22 @@ public class LiveActivity extends Activity {
         root.setBackgroundColor(Color.BLACK);
         setContentView(root);
 
+        videoBox = new FrameLayout(this);
+        root.addView(videoBox, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         video = new VideoView(this);
-        root.addView(video, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        videoBox.addView(video, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        surface = new SurfaceView(this);
+        videoBox.addView(surface, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        videoBox.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+                if (r - l != or - ol || b - t != ob - ot) fitSurface();
+            }
+        });
         video.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
             @Override
             public void onPrepared(MediaPlayer mp) {
+                new Picks(prefs).markWatched(user);
                 spinner.setVisibility(View.GONE);
                 status.setVisibility(View.GONE);
                 mp.setLooping(false);
@@ -187,10 +217,17 @@ public class LiveActivity extends Activity {
         hint = text(15, Color.WHITE, false);
         hint.setBackgroundResource(R.drawable.card_bg);
         hint.setPadding(dp(18), dp(8), dp(18), dp(8));
-        hint.setText("▲ ▼  Switch LIVE      " + (prefs.nativeChat() ? "▶  Chat      " : "") + "OK  Info      ≡  Quality      Back  Exit");
+        hint.setText("▲ ▼  Switch LIVE      " + (prefs.nativeChat() ? "▶  Chat      " : "") + "OK  Info      ≡  Options (quality, free mouse)      Back  LIVE list");
         FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         hlp.bottomMargin = dp(24);
         root.addView(hint, hlp);
+
+        pointer = new Pointer(this, root);
+        root.addView(pointer, new FrameLayout.LayoutParams(-1, -1));
+        pointer.post(new Runnable() {
+            @Override
+            public void run() { pointer.setOn("1".equals(prefs.get("mouse", "0"))); }
+        });
     }
 
     private TextView text(float size, int color, boolean bold) {
@@ -228,7 +265,7 @@ public class LiveActivity extends Activity {
         user = u;
         failed = false;
         final int token = ++loadToken;
-        video.stopPlayback();
+        stopPlayback();
         infoName.setText("@" + u);
         infoTitle.setText("");
         infoViewers.setText("");
@@ -274,11 +311,87 @@ public class LiveActivity extends Activity {
 
     private void play(String url) {
         setStatus(null, true);
+        stopPlayback();
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", Prefs.DESKTOP_UA);
         headers.put("Referer", "https://www.tiktok.com/");
+        if (url.split("\\?")[0].endsWith(".flv")) {
+            playFlv(url, headers);
+            return;
+        }
+        surface.setVisibility(View.GONE);
+        video.setVisibility(View.VISIBLE);
         video.setVideoURI(Uri.parse(url), headers);
         video.requestFocus();
+    }
+
+    /** TikTok's web LIVE streams are FLV, which the system player can't open: ExoPlayer plays them. */
+    private void playFlv(String url, Map<String, String> headers) {
+        video.setVisibility(View.GONE);
+        surface.setVisibility(View.VISIBLE);
+        if (exo == null) {
+            DefaultLoadControl lc = new DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(3000, 20000, 1000, 2000)
+                    .build();
+            exo = new ExoPlayer.Builder(this).setLoadControl(lc).build();
+            exo.setVideoSurfaceView(surface);
+            exo.addListener(new Player.Listener() {
+                @Override
+                public void onPlaybackStateChanged(int state) {
+                    if (state == Player.STATE_READY) {
+                        new Picks(prefs).markWatched(user);
+                        spinner.setVisibility(View.GONE);
+                        status.setVisibility(View.GONE);
+                        showInfo();
+                    } else if (state == Player.STATE_BUFFERING) {
+                        spinner.setVisibility(View.VISIBLE);
+                    } else if (state == Player.STATE_ENDED) {
+                        load(user);   // ended or dropped: check again
+                    }
+                }
+
+                @Override
+                public void onPlayerError(PlaybackException error) {
+                    tryNextStream();
+                }
+
+                @Override
+                public void onVideoSizeChanged(VideoSize size) {
+                    videoW = Math.round(size.width * size.pixelWidthHeightRatio);
+                    videoH = size.height;
+                    fitSurface();
+                }
+            });
+        }
+        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                .setUserAgent(Prefs.DESKTOP_UA)
+                .setDefaultRequestProperties(headers)
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(10000)
+                .setReadTimeoutMs(15000);
+        MediaSource src = new ProgressiveMediaSource.Factory(http, com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.FACTORY)
+                .createMediaSource(MediaItem.fromUri(url));
+        exo.setMediaSource(src);
+        exo.prepare();
+        exo.setPlayWhenReady(true);
+    }
+
+    /** Keeps the video's shape (most LIVEs are portrait) inside the video area. */
+    private void fitSurface() {
+        if (videoW <= 0 || videoH <= 0) return;
+        int bw = videoBox.getWidth(), bh = videoBox.getHeight();
+        if (bw <= 0 || bh <= 0) return;
+        float s = Math.min(bw / (float) videoW, bh / (float) videoH);
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) surface.getLayoutParams();
+        lp.width = Math.round(videoW * s);
+        lp.height = Math.round(videoH * s);
+        lp.gravity = Gravity.CENTER;
+        surface.setLayoutParams(lp);
+    }
+
+    private void stopPlayback() {
+        video.stopPlayback();
+        if (exo != null) exo.stop();
     }
 
     private void tryNextStream() {
@@ -288,7 +401,7 @@ public class LiveActivity extends Activity {
             return;
         }
         failed = true;
-        video.stopPlayback();
+        stopPlayback();
         setStatus("Couldn't play this LIVE in the Fire TV player.\nPress OK to watch it in the website player.", false);
     }
 
@@ -309,6 +422,17 @@ public class LiveActivity extends Activity {
 
     private Result resolve(String u, String pageJson) {
         Result r = new Result();
+        // 0) Stream data from the LIVE list the home screen already loaded.
+        Feed.Room fr = Feed.find(u);
+        if (fr != null && System.currentTimeMillis() - Feed.updatedAt < 10 * 60 * 1000) {
+            r.nickname = fr.nick;
+            r.title = emptyToNull(fr.title);
+            r.viewers = fr.viewers;
+            r.live = true;
+            addFromStreamData(fr.streamData, r);
+            addUrl(r, fr.hls);
+            if (!r.hls.isEmpty()) return r;
+        }
         // 1) Data embedded in the page the user was on.
         if (pageJson != null && pageJson.length() > 0) {
             try { parseUserRoom(new JSONObject(pageJson), r); } catch (Exception ignored) { }
@@ -390,7 +514,10 @@ public class LiveActivity extends Activity {
                 JSONObject level = data.optJSONObject(q);
                 if (level == null) continue;
                 JSONObject main = level.optJSONObject("main");
-                if (main != null) addUrl(r, main.optString("hls"));
+                if (main != null) {
+                    addUrl(r, main.optString("flv"));
+                    addUrl(r, main.optString("hls"));
+                }
             }
         } catch (Exception ignored) {
         }
@@ -399,7 +526,10 @@ public class LiveActivity extends Activity {
     private List<String> qualityOrder() {
         List<String> order = new ArrayList<>();
         String q = prefs.quality();
-        if (!"auto".equals(q)) order.add(q);
+        if (!"auto".equals(q)) {
+            order.add(q);
+            order.add(q + "_60");
+        }
         for (String s : QUALITY_ORDER) if (!order.contains(s)) order.add(s);
         return order;
     }
@@ -442,7 +572,7 @@ public class LiveActivity extends Activity {
         }
         chatOpen = !chatOpen;
         int w = (int) (getResources().getDisplayMetrics().widthPixels * 0.32f);
-        FrameLayout.LayoutParams vlp = (FrameLayout.LayoutParams) video.getLayoutParams();
+        FrameLayout.LayoutParams vlp = (FrameLayout.LayoutParams) videoBox.getLayoutParams();
         if (chatOpen) {
             if (chat == null) {
                 chat = new WebView(this);
@@ -476,7 +606,7 @@ public class LiveActivity extends Activity {
             vlp.rightMargin = 0;
             vlp.gravity = Gravity.CENTER;
         }
-        video.setLayoutParams(vlp);
+        videoBox.setLayoutParams(vlp);
         info.bringToFront();
         hint.bringToFront();
     }
@@ -500,6 +630,7 @@ public class LiveActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
+        if (pointer != null && pointer.handleKey(e)) return true;
         if (e.getAction() != KeyEvent.ACTION_DOWN) {
             return e.getKeyCode() == KeyEvent.KEYCODE_BACK || super.dispatchKeyEvent(e);
         }
@@ -527,7 +658,7 @@ public class LiveActivity extends Activity {
                 else showInfo();
                 return true;
             case KeyEvent.KEYCODE_MENU:
-                cycleQuality();
+                if (e.getRepeatCount() == 0) showOptions();
                 return true;
             case KeyEvent.KEYCODE_BACK:
                 if (chatOpen) toggleChat();
@@ -558,10 +689,51 @@ public class LiveActivity extends Activity {
     }
 
     private void fallbackToWeb() {
-        Intent data = new Intent();
-        data.putExtra("fallbackUser", user);
-        setResult(RESULT_OK, data);
+        if (getCallingActivity() != null) {
+            // Opened from the website screen: let it switch to the website player.
+            Intent data = new Intent();
+            data.putExtra("fallbackUser", user);
+            setResult(RESULT_OK, data);
+            finish();
+            return;
+        }
+        Intent i = new Intent(this, MainActivity.class);
+        i.setData(Uri.parse("https://www.tiktok.com/@" + user + "/live"));
+        i.putExtra("webOnly", user);
+        startActivity(i);
         finish();
+    }
+
+    private void showOptions() {
+        final Picks picks = new Picks(prefs);
+        final String[] items = {
+                "Quality: " + Prefs.labelFor(Prefs.QUALITY_OPTIONS, prefs.quality()),
+                picks.isPinned(user) ? "Unpin @" + user : "Pin @" + user + " to top",
+                "Free mouse: " + (pointer.isOn() ? "On" : "Off"),
+                chatOpen ? "Hide chat" : "Show chat",
+                "Watch in website player (gifts, full page)",
+                "Back to LIVE list",
+        };
+        new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                .setTitle("@" + user)
+                .setItems(items, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        switch (which) {
+                            case 0: cycleQuality(); break;
+                            case 1: toast(picks.togglePin(user) ? "Pinned @" + user : "Unpinned @" + user); break;
+                            case 2:
+                                pointer.toggle();
+                                prefs.put("mouse", pointer.isOn() ? "1" : "0");
+                                toast(pointer.isOn() ? "Free mouse on: arrows move, OK clicks, ⏪ ⏩ switch LIVE" : "Free mouse off");
+                                break;
+                            case 3: toggleChat(); break;
+                            case 4: fallbackToWeb(); break;
+                            case 5: finish(); break;
+                        }
+                    }
+                })
+                .show();
     }
 
     private void toast(String s) {
@@ -574,7 +746,7 @@ public class LiveActivity extends Activity {
     protected void onPause() {
         super.onPause();
         paused = true;
-        video.stopPlayback();
+        stopPlayback();
     }
 
     @Override
@@ -590,7 +762,11 @@ public class LiveActivity extends Activity {
     @Override
     protected void onDestroy() {
         loadToken++;
-        video.stopPlayback();
+        stopPlayback();
+        if (exo != null) {
+            exo.release();
+            exo = null;
+        }
         if (chat != null) {
             root.removeView(chat);
             chat.destroy();
