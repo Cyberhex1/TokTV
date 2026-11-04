@@ -72,8 +72,8 @@ public class LiveActivity extends Activity {
     private LinearLayout info;
     private TextView infoName, infoTitle, infoViewers, status, hint;
     private ProgressBar spinner;
-    private WebView chat;
-    private boolean chatOpen;
+    private ChatPanel chatPanel;
+    private SpeakerOverlay speakers;
 
     private final List<String> lives = new ArrayList<>();
     private int index;
@@ -130,6 +130,10 @@ public class LiveActivity extends Activity {
         videoBox.addView(video, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         surface = new SurfaceView(this);
         videoBox.addView(surface, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        videoBox.setBackgroundColor(Color.BLACK);   // also covers the hidden chat page underneath
+        speakers = new SpeakerOverlay(this);
+        speakers.setEnabledHighlight(!"0".equals(prefs.get("talk_highlight", "1")));
+        videoBox.addView(speakers, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         videoBox.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
             @Override
             public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
@@ -199,8 +203,8 @@ public class LiveActivity extends Activity {
         infoViewers = text(15, Color.parseColor("#25F4EE"), false);
         infoViewers.setPadding(0, dp(4), 0, 0);
         info.addView(infoViewers);
-        FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(dp(520), -2, Gravity.TOP | Gravity.START);
-        ilp.setMargins(dp(32), dp(28), 0, 0);
+        FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(dp(520), -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        ilp.setMargins(0, dp(24), 0, 0);
         root.addView(info, ilp);
 
         spinner = new ProgressBar(this);
@@ -217,10 +221,15 @@ public class LiveActivity extends Activity {
         hint = text(15, Color.WHITE, false);
         hint.setBackgroundResource(R.drawable.card_bg);
         hint.setPadding(dp(18), dp(8), dp(18), dp(8));
-        hint.setText("▲ ▼  Switch LIVE      " + (prefs.nativeChat() ? "▶  Chat      " : "") + "OK  Info      ≡  Options (quality, free mouse)      Back  LIVE list");
+        hint.setText("▲ ▼  Switch LIVE      ◀ ▶  Chat / reactions      OK  Info      ≡  Options      Back  LIVE list");
         FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         hlp.bottomMargin = dp(24);
         root.addView(hint, hlp);
+
+        chatPanel = new ChatPanel(this, root, prefs);
+        if (prefs.nativeChat() && !"0".equals(prefs.get("chat_open", "1"))) chatPanel.open(user);
+        info.bringToFront();
+        hint.bringToFront();
 
         pointer = new Pointer(this, root);
         root.addView(pointer, new FrameLayout.LayoutParams(-1, -1));
@@ -271,7 +280,8 @@ public class LiveActivity extends Activity {
         infoViewers.setText("");
         showInfo();
         setStatus("Opening @" + u + "'s LIVE…", true);
-        if (chatOpen) loadChat();
+        if (chatPanel != null) chatPanel.switchTo(u);
+        if (speakers != null) speakers.clear();
 
         final String page = pageStream;
         pageStream = null;   // only valid for the first Live we were opened with
@@ -369,6 +379,11 @@ public class LiveActivity extends Activity {
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(10000)
                 .setReadTimeoutMs(15000);
+        seiQueue.clear();
+        speakers.clear();
+        com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.seiListener = seiListener;
+        ui.removeCallbacks(seiTick);
+        ui.post(seiTick);
         MediaSource src = new ProgressiveMediaSource.Factory(http, com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.FACTORY)
                 .createMediaSource(MediaItem.fromUri(url));
         exo.setMediaSource(src);
@@ -387,7 +402,40 @@ public class LiveActivity extends Activity {
         lp.height = Math.round(videoH * s);
         lp.gravity = Gravity.CENTER;
         surface.setLayoutParams(lp);
+        FrameLayout.LayoutParams olp = (FrameLayout.LayoutParams) speakers.getLayoutParams();
+        olp.width = lp.width;
+        olp.height = lp.height;
+        olp.gravity = Gravity.CENTER;
+        speakers.setLayoutParams(olp);
     }
+
+    // ---------------------------------------------------------------- Who's talking (from the stream)
+
+    private final java.util.concurrent.ConcurrentLinkedQueue<Object[]> seiQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    private final com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.SeiListener seiListener =
+            new com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.SeiListener() {
+                @Override
+                public void onSei(long timeUs, String json) {
+                    if (seiQueue.size() < 200) seiQueue.add(new Object[]{timeUs, json});
+                }
+            };
+
+    /** Applies each SEI message when its frame is on screen (the loader runs a few seconds ahead). */
+    private final Runnable seiTick = new Runnable() {
+        @Override
+        public void run() {
+            if (exo != null) {
+                long pos = exo.getCurrentPosition() * 1000L + 100000L;
+                Object[] head;
+                while ((head = seiQueue.peek()) != null && (Long) head[0] <= pos) {
+                    seiQueue.poll();
+                    speakers.apply((String) head[1]);
+                }
+            }
+            ui.postDelayed(this, 100);
+        }
+    };
 
     private void stopPlayback() {
         video.stopPlayback();
@@ -565,72 +613,25 @@ public class LiveActivity extends Activity {
 
     // ---------------------------------------------------------------- Chat panel
 
+    /** Read-only native chat beside the video, with quick reactions on the other side. */
     private void toggleChat() {
-        if (!prefs.nativeChat()) {
-            toast("Chat is turned off in Settings");
-            return;
-        }
-        chatOpen = !chatOpen;
-        int w = (int) (getResources().getDisplayMetrics().widthPixels * 0.32f);
-        FrameLayout.LayoutParams vlp = (FrameLayout.LayoutParams) videoBox.getLayoutParams();
-        if (chatOpen) {
-            if (chat == null) {
-                chat = new WebView(this);
-                WebSettings s = chat.getSettings();
-                s.setJavaScriptEnabled(true);
-                s.setDomStorageEnabled(true);
-                s.setUserAgentString(Prefs.DESKTOP_UA);
-                s.setMediaPlaybackRequiresUserGesture(true);
-                s.setUseWideViewPort(true);
-                s.setLoadWithOverviewMode(true);
-                chat.setBackgroundColor(Color.BLACK);
-                chat.setFocusable(false);
-                CookieManager.getInstance().setAcceptThirdPartyCookies(chat, true);
-                chat.setWebViewClient(new WebViewClient() {
-                    @Override
-                    public void onPageFinished(WebView view, String url) {
-                        view.evaluateJavascript(CHAT_JS, null);
-                    }
-                });
-                root.addView(chat, new FrameLayout.LayoutParams(w, -1, Gravity.END));
-            }
-            chat.setVisibility(View.VISIBLE);
-            loadChat();
-            vlp.rightMargin = w;
-            vlp.gravity = Gravity.CENTER_VERTICAL | Gravity.START;
+        if (chatPanel.isOpen()) {
+            chatPanel.close();
+            prefs.put("chat_open", "0");
         } else {
-            if (chat != null) {
-                chat.setVisibility(View.GONE);
-                chat.loadUrl("about:blank");
-            }
-            vlp.rightMargin = 0;
-            vlp.gravity = Gravity.CENTER;
+            chatPanel.open(user);
+            prefs.put("chat_open", "1");
         }
-        videoBox.setLayoutParams(vlp);
         info.bringToFront();
         hint.bringToFront();
+        pointer.bringToFront();
     }
-
-    private void loadChat() {
-        if (chat != null) chat.loadUrl("https://www.tiktok.com/@" + user + "/live");
-    }
-
-    /** Keeps the chat page silent: hides and pauses its video so only chat and comments show. */
-    private static final String CHAT_JS =
-            "(function(){var st=document.createElement('style');"
-            + "st.textContent='video{display:none!important}html,body{cursor:none!important}';"
-            + "document.head.appendChild(st);"
-            + "setInterval(function(){var v=document.querySelectorAll('video');"
-            + "for(var i=0;i<v.length;i++){v[i].muted=true;v[i].pause();}"
-            + "var c=document.querySelector('[data-e2e=\"chat-room\"],[class*=\"DivChatRoomContainer\"],[class*=\"ChatRoom\"]');"
-            + "if(c&&!c.__tv){c.__tv=1;c.scrollIntoView();}"
-            + "},1000);})();";
-
     // ---------------------------------------------------------------- Keys
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
         if (pointer != null && pointer.handleKey(e)) return true;
+        if (chatPanel != null && chatPanel.handleKey(e)) return true;
         if (e.getAction() != KeyEvent.ACTION_DOWN) {
             return e.getKeyCode() == KeyEvent.KEYCODE_BACK || super.dispatchKeyEvent(e);
         }
@@ -646,10 +647,9 @@ public class LiveActivity extends Activity {
                 if (e.getRepeatCount() == 0) switchLive(1);
                 return true;
             case KeyEvent.KEYCODE_DPAD_RIGHT:
-                if (!chatOpen) toggleChat(); else showInfo();
-                return true;
             case KeyEvent.KEYCODE_DPAD_LEFT:
-                if (chatOpen) toggleChat(); else showInfo();
+                // Toward the chat side shows/hides chat (toward the reactions side is ChatPanel's).
+                if (e.getRepeatCount() == 0) toggleChat();
                 return true;
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
@@ -661,8 +661,7 @@ public class LiveActivity extends Activity {
                 if (e.getRepeatCount() == 0) showOptions();
                 return true;
             case KeyEvent.KEYCODE_BACK:
-                if (chatOpen) toggleChat();
-                else finish();
+                finish();
                 return true;
         }
         return super.dispatchKeyEvent(e);
@@ -710,7 +709,7 @@ public class LiveActivity extends Activity {
                 "Quality: " + Prefs.labelFor(Prefs.QUALITY_OPTIONS, prefs.quality()),
                 picks.isPinned(user) ? "Unpin @" + user : "Pin @" + user + " to top",
                 "Free mouse: " + (pointer.isOn() ? "On" : "Off"),
-                chatOpen ? "Hide chat" : "Show chat",
+                chatPanel.isOpen() ? "Hide chat" : "Show chat",
                 "Watch in website player (gifts, full page)",
                 "Back to LIVE list",
         };
@@ -767,10 +766,9 @@ public class LiveActivity extends Activity {
             exo.release();
             exo = null;
         }
-        if (chat != null) {
-            root.removeView(chat);
-            chat.destroy();
-        }
+        com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.seiListener = null;
+        ui.removeCallbacksAndMessages(null);
+        if (chatPanel != null) chatPanel.close();
         super.onDestroy();
     }
 }

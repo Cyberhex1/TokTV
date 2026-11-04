@@ -49,8 +49,15 @@ public class SettingsActivity extends Activity {
                 "live_player", Prefs.PLAYER_NATIVE, Prefs.PLAYER_OPTIONS);
         option("Native player quality", "Menu (≡) in the native player also changes this.",
                 "quality", "auto", Prefs.QUALITY_OPTIONS);
-        option("Chat in native player", "Press ▶ while watching to show chat beside the video.",
+        option("LIVE chat", "Read-only chat beside the video, with quick reactions on the other side. ◀ ▶ while watching.",
                 "native_chat", "1", Prefs.ONOFF);
+        option("Chat side", "Reactions go on the other side.", "chat_side", "right",
+                new String[][]{{"right", "Right"}, {"left", "Left"}});
+        option("Chat text size", "", "chat_size", "18",
+                new String[][]{{"16", "Small"}, {"18", "Medium"}, {"22", "Large"}, {"26", "Extra large"}});
+        option("Show who joined", "\"name joined\" lines in chat.", "chat_joins", "1", Prefs.ONOFF);
+        option("Who's talking", "Blue box around the guest who is speaking in multi-guest LIVEs.",
+                "talk_highlight", "1", Prefs.ONOFF);
         option("Free mouse", "A pointer you move with the arrows; OK clicks. Also in ≡ menus.", "mouse", "0", Prefs.ONOFF);
         option("Text and layout size", "How big tiktok.com looks on the TV.",
                 "ui_scale", "150", Prefs.SIZE_OPTIONS);
@@ -64,7 +71,7 @@ public class SettingsActivity extends Activity {
         });
 
         TextView about = new TextView(this);
-        about.setText("TokTV 2.1 LIVE · sideload build");
+        about.setText("TokTV 2.2 LIVE · sideload build");
         about.setTextColor(Color.GRAY);
         about.setTextSize(14);
         about.setPadding(dp(16), dp(24), 0, 0);

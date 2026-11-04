@@ -50,7 +50,7 @@ Pinned creators get their own row at the top; when they're offline they stay the
 
 **LIVE (website player)**: ▲ / ▼ switch between Lives, OK turns the sound on, ▶ reaches chat, Follow and the rest of the page.
 
-**LIVE (native player)**: ▲ / ▼ (or ⏪ ⏩) switch Lives, ▶ show chat on the side, ◀ hide chat, OK show stream info, ≡ options (quality, pin, free mouse, chat, website player), Back to the LIVE list.
+**LIVE (native player)**: ▲ / ▼ (or ⏪ ⏩) switch Lives. Read-only chat sits beside the video (side, text size and joins are in Settings); the arrow toward the chat side hides/shows it, the arrow toward the other side focuses the quick reactions (❤️ Like, 👋 😂 🔥 👏, hi!; ▲ ▼ pick, OK send, Back leave). In multi-guest LIVEs a blue box marks whoever is talking (read from the stream itself). OK shows stream info, ≡ options (quality, pin, free mouse, chat, website player), Back to the LIVE list.
 
 ## Settings (Menu > Settings)
 

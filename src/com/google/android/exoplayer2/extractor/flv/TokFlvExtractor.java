@@ -164,8 +164,43 @@ public final class TokFlvExtractor implements Extractor {
         return outputFirstSample ? timestampOffsetUs + tagTimestampUs : 0;
     }
 
+    /**
+     * Receives the JSON that TikTok puts in the video's SEI messages. Multi-guest LIVEs send the
+     * guest layout ("grids": x/y/w/h on the canvas) with who is talking ("talk", "talk_volume").
+     * Called on the loading thread with the sample time of the frame it belongs to.
+     */
+    public interface SeiListener {
+        void onSei(long timeUs, String json);
+    }
+
+    public static volatile SeiListener seiListener;
+
     /** H.264 (codec 7) and HEVC (codec 12) video tags. */
     static final class VideoReader extends TagPayloadReader {
+        private long lastSeiAt, lastLayoutAt;
+
+        private void probeSei(ParsableByteArray data, int n, long timeUs) {
+            SeiListener l = seiListener;
+            if (l == null || n < 16) return;
+            byte b0 = data.getData()[data.getPosition()];
+            boolean sei = codec == CODEC_HEVC ? ((b0 >> 1) & 0x3F) == 39 || ((b0 >> 1) & 0x3F) == 40 : (b0 & 0x1F) == 6;
+            if (!sei) return;
+            long now = System.currentTimeMillis();
+            boolean big = n > 600;   // layout messages are ~4 KB, talk-only ones ~200 bytes
+            if (now - (big ? lastLayoutAt : lastSeiAt) < (big ? 400 : 150)) return;
+            byte[] d = data.getData();
+            int start = data.getPosition(), end = start + n;
+            int brace = -1;
+            for (int i = start; i < end; i++) if (d[i] == '{') { brace = i; break; }
+            if (brace < 0) return;
+            int last = end - 1;
+            while (last > brace && d[last] != '}') last--;
+            if (last <= brace) return;
+            String s = new String(d, brace, last - brace + 1, java.nio.charset.Charset.forName("UTF-8"));
+            if (!s.contains("talk")) return;
+            if (big) lastLayoutAt = now; else lastSeiAt = now;
+            l.onSei(timeUs, s);
+        }
         private static final int CODEC_AVC = 7;
         private static final int CODEC_HEVC = 12;
         private final ParsableByteArray nalStartCode = new ParsableByteArray(NalUnitUtil.NAL_START_CODE);
@@ -227,6 +262,7 @@ public final class TokFlvExtractor implements Extractor {
                     data.readBytes(lenData, diff, nalUnitLengthFieldLength);
                     nalLength.setPosition(0);
                     int n = nalLength.readUnsignedIntToInt();
+                    probeSei(data, n, timeUs);
                     nalStartCode.setPosition(0);
                     output.sampleData(nalStartCode, 4);
                     written += 4;

@@ -29,12 +29,12 @@ foreach ($line in Get-Content libs.txt) {
 if (Test-Path build) { Remove-Item -Recurse -Force build }
 New-Item -ItemType Directory build\gen, build\classes | Out-Null
 Run aapt2 compile --dir res -o build\res.zip
-Run aapt2 link -o build\unsigned.apk -I $jar --manifest AndroidManifest.xml -A assets --java build\gen --min-sdk-version 22 --target-sdk-version 30 --version-code 4 --version-name 2.1 build\res.zip
+Run aapt2 link -o build\unsigned.apk -I $jar --manifest AndroidManifest.xml -A assets --java build\gen --min-sdk-version 22 --target-sdk-version 30 --version-code 5 --version-name 2.2 build\res.zip
 Get-ChildItem src, build\gen -Recurse -Filter *.java | ForEach-Object FullName | Set-Content build\sources.txt
 Run javac -nowarn -encoding UTF-8 -source 8 -target 8 -bootclasspath $jar -classpath "$jar;libs\jars\*" -d build\classes "@build\sources.txt"
-$classes = Get-ChildItem build\classes -Recurse -Filter *.class | ForEach-Object FullName
 $jars = Get-ChildItem libs\jars -Filter *.jar | ForEach-Object FullName
-Run d8.bat --release --min-api 22 --lib $jar --output build @classes @jars
+Run jar cf build\app-classes.jar -C build\classes .
+Run d8.bat --release --min-api 22 --lib $jar --output build build\app-classes.jar @jars
 Push-Location build; Run jar uf unsigned.apk classes.dex; Pop-Location
 Run zipalign.exe -f -p 4 build\unsigned.apk build\aligned.apk
 
