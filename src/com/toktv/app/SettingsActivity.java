@@ -55,7 +55,9 @@ public class SettingsActivity extends Activity {
                 new String[][]{{"right", "Right"}, {"left", "Left"}});
         option("Chat text size", "", "chat_size", "18",
                 new String[][]{{"16", "Small"}, {"18", "Medium"}, {"22", "Large"}, {"26", "Extra large"}});
-        option("Show who joined", "\"name joined\" lines in chat.", "chat_joins", "1", Prefs.ONOFF);
+        option("Show who joined", "\"name joined\" lines in chat.", "chat_joins", "0", Prefs.ONOFF);
+        option("Profanity filter", "Masks swear words in chat. Off shows chat exactly as TikTok shows it.", "chat_filter", "0", Prefs.ONOFF);
+        option("Went-LIVE alerts", "Banner on the LIVE list when a pinned creator goes LIVE.", "golive_alerts", "1", Prefs.ONOFF);
         option("Who's talking", "Blue box around the guest who is speaking in multi-guest LIVEs.",
                 "talk_highlight", "1", Prefs.ONOFF);
         option("Free mouse", "A pointer you move with the arrows; OK clicks. Also in ≡ menus.", "mouse", "0", Prefs.ONOFF);
@@ -71,7 +73,7 @@ public class SettingsActivity extends Activity {
         });
 
         TextView about = new TextView(this);
-        about.setText("TokTV 2.2 LIVE · sideload build");
+        about.setText("TokTV 2.3 LIVE · sideload build");
         about.setTextColor(Color.GRAY);
         about.setTextSize(14);
         about.setPadding(dp(16), dp(24), 0, 0);
@@ -177,5 +179,11 @@ public class SettingsActivity extends Activity {
     public void onBackPressed() {
         setResult(RESULT_OK);
         super.onBackPressed();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        Tv.top = this;
     }
 }

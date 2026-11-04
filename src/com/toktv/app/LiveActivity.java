@@ -72,6 +72,10 @@ public class LiveActivity extends Activity {
     private LinearLayout info;
     private TextView infoName, infoTitle, infoViewers, status, hint;
     private ProgressBar spinner;
+    /** The LIVE on screen, for TokTV Remote. */
+    static volatile LiveActivity current;
+    String curNick, curTitle;
+    long curViewers;
     private ChatPanel chatPanel;
     private SpeakerOverlay speakers;
 
@@ -300,7 +304,26 @@ public class LiveActivity extends Activity {
         }).start();
     }
 
+    String user() { return user; }
+
+    ChatPanel chat() { return chatPanel; }
+
+    void remoteToggleChat() { toggleChat(); }
+
+    void remoteSwitch(int dir) { switchLive(dir); }
+
+    void remoteQuality() { cycleQuality(); }
+
+    void remoteWatch(String u) {
+        if (!containsIgnoreCase(lives, u)) lives.add(index + 1, u);
+        for (int i = 0; i < lives.size(); i++) if (lives.get(i).equalsIgnoreCase(u)) index = i;
+        load(u);
+    }
+
     private void onResolved(Result r) {
+        curNick = r.nickname;
+        curTitle = r.title;
+        curViewers = r.viewers;
         if (r.nickname != null) infoName.setText(r.nickname + "  @" + user);
         if (r.title != null) infoTitle.setText(r.title);
         if (r.viewers > 0) infoViewers.setText(formatCount(r.viewers) + " watching");
@@ -743,6 +766,7 @@ public class LiveActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        if (current == this) current = null;
         paused = true;
         stopPlayback();
     }
@@ -750,6 +774,8 @@ public class LiveActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        current = this;
+        Tv.top = this;
         // A paused Live is stale; reconnect to the live edge.
         if (paused) {
             paused = false;

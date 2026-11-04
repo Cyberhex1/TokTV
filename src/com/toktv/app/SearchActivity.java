@@ -48,6 +48,10 @@ public class SearchActivity extends Activity {
     private Pointer pointer;
     private SearchLoader loader;
     private List<Feed.Room> liveResults, accountResults;
+    /** Latest results, for TokTV Remote. */
+    static volatile List<Feed.Room> lastLive, lastAccounts;
+    static volatile String lastQuery;
+    static volatile boolean searching;
     private String searched;
 
     @Override
@@ -143,6 +147,10 @@ public class SearchActivity extends Activity {
         hideKeyboard();
         if (loader != null) loader.cancel();
         searched = q;
+        lastQuery = q;
+        lastLive = null;
+        lastAccounts = null;
+        searching = true;
         liveResults = null;
         accountResults = null;
         spinner.setVisibility(View.VISIBLE);
@@ -152,6 +160,7 @@ public class SearchActivity extends Activity {
             @Override
             public void onLive(List<Feed.Room> rooms) {
                 liveResults = rooms;
+                lastLive = rooms;
                 Feed.remember(rooms);
                 render();
             }
@@ -159,12 +168,14 @@ public class SearchActivity extends Activity {
             @Override
             public void onAccounts(List<Feed.Room> accounts) {
                 accountResults = accounts;
+                lastAccounts = accounts;
                 render();
             }
 
             @Override
             public void onDone() {
                 loader = null;
+                searching = false;
                 spinner.setVisibility(View.GONE);
                 boolean none = (liveResults == null || liveResults.isEmpty()) && (accountResults == null || accountResults.isEmpty());
                 status.setText(none ? "Nothing found for \"" + q + "\" (or TikTok didn't answer). Try another word."
@@ -358,6 +369,7 @@ public class SearchActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        Tv.top = this;
         pointer.post(new Runnable() {
             @Override
             public void run() { pointer.setOn("1".equals(prefs.get("mouse", "0"))); }

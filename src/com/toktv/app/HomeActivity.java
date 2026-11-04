@@ -55,6 +55,12 @@ public class HomeActivity extends Activity {
         super.onCreate(savedInstanceState);
         prefs = new Prefs(this);
         picks = new Picks(prefs);
+        if (!"1".equals(prefs.get("defaults_v6", ""))) {
+            // New defaults: no "joined" lines, no profanity masking.
+            prefs.put("chat_joins", "0");
+            prefs.put("chat_filter", "0");
+            prefs.put("defaults_v6", "1");
+        }
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#0B0B0B"));
         setContentView(root);
@@ -137,7 +143,7 @@ public class HomeActivity extends Activity {
                 if (!first) {
                     List<String> wentLive = new ArrayList<>();
                     for (String u : wasOff) if (Feed.findListed(u) != null) wentLive.add(u);
-                    if (!wentLive.isEmpty()) banner(wentLive);
+                    if (!wentLive.isEmpty() && !"0".equals(prefs.get("golive_alerts", "1"))) banner(wentLive);
                 }
                 render();
             }
@@ -580,6 +586,7 @@ public class HomeActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        Tv.top = this;
         resumed = true;
         pointer.post(new Runnable() {
             @Override

@@ -100,4 +100,10 @@ public class LoginActivity extends Activity {
         if (web != null) web.destroy();
         super.onDestroy();
     }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        Tv.top = this;
+    }
 }

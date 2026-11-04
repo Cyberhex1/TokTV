@@ -676,6 +676,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        Tv.top = this;
         web.onResume();
         web.requestFocus();
     }
