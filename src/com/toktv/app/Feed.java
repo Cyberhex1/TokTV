@@ -20,6 +20,7 @@ public final class Feed {
 
     public static final List<Room> following = new ArrayList<>();
     public static final List<Room> suggested = new ArrayList<>();
+    public static final List<Room> gaming = new ArrayList<>();
     private static final Map<String, Room> byUser = new HashMap<>();
     public static long updatedAt;
 
@@ -36,7 +37,7 @@ public final class Feed {
         return user == null ? null : byUser.get(user.toLowerCase());
     }
 
-    public static synchronized void set(List<Room> follow, List<Room> sugg) {
+    public static synchronized void set(List<Room> follow, List<Room> sugg, List<Room> games) {
         if (follow != null) {
             following.clear();
             following.addAll(follow);
@@ -46,7 +47,12 @@ public final class Feed {
             // Don't repeat people already in Following.
             for (Room r : sugg) if (!contains(following, r.user)) suggested.add(r);
         }
+        if (games != null) {
+            gaming.clear();
+            for (Room r : games) if (!contains(following, r.user) && !contains(suggested, r.user)) gaming.add(r);
+        }
         byUser.clear();
+        for (Room r : gaming) byUser.put(r.user.toLowerCase(), r);
         for (Room r : suggested) byUser.put(r.user.toLowerCase(), r);
         for (Room r : following) byUser.put(r.user.toLowerCase(), r);
         updatedAt = System.currentTimeMillis();
@@ -62,6 +68,7 @@ public final class Feed {
         JSONArray a = new JSONArray();
         for (Room r : following) a.put(r.user);
         for (Room r : suggested) a.put(r.user);
+        for (Room r : gaming) a.put(r.user);
         return a;
     }
 

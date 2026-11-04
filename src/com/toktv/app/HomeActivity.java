@@ -61,6 +61,7 @@ public class HomeActivity extends Activity {
 
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundColor(Color.parseColor("#0B0B0B"));   // hides the list loader's page behind it
         root.addView(page, new FrameLayout.LayoutParams(-1, -1));
 
         // Header
@@ -116,7 +117,7 @@ public class HomeActivity extends Activity {
         status.setText(Feed.updatedAt == 0 ? "Finding LIVEs…" : "Refreshing…");
         loader = new FeedLoader(this, root, new FeedLoader.Callback() {
             @Override
-            public void onFeed(List<Feed.Room> following, List<Feed.Room> suggested, boolean loggedIn) {
+            public void onFeed(List<Feed.Room> following, List<Feed.Room> suggested, List<Feed.Room> gaming, boolean loggedIn) {
                 loader = null;
                 spinner.setVisibility(View.GONE);
                 if (following == null && suggested == null) {
@@ -124,7 +125,20 @@ public class HomeActivity extends Activity {
                     if (Feed.updatedAt == 0) render();
                     return;
                 }
-                Feed.set(following, suggested);
+                // Which pinned creators were offline before this refresh?
+                boolean first = Feed.updatedAt == 0;
+                List<String> wasOff = new ArrayList<>();
+                for (String u : picks.pinned()) if (Feed.findListed(u) == null) wasOff.add(u);
+                Feed.set(following, suggested, gaming);
+                List<String> liveNow = new ArrayList<>();
+                for (Feed.Room r : Feed.following) liveNow.add(r.user);
+                for (String u : picks.pinned()) if (Feed.findListed(u) != null) liveNow.add(u);
+                picks.markSeenLive(liveNow);
+                if (!first) {
+                    List<String> wentLive = new ArrayList<>();
+                    for (String u : wasOff) if (Feed.findListed(u) != null) wentLive.add(u);
+                    if (!wentLive.isEmpty()) banner(wentLive);
+                }
                 render();
             }
         });
@@ -181,7 +195,9 @@ public class HomeActivity extends Activity {
                 Feed.Room off = new Feed.Room();
                 off.user = u;
                 off.nick = u;
-                off.title = "Not LIVE right now";
+                off.live = false;
+                long seen = picks.lastSeenLive(u);
+                off.title = seen > 0 ? "Not LIVE · last seen LIVE " + Picks.ago(seen) : "Not LIVE right now";
                 pinOff.add(off);
             }
         }
@@ -206,8 +222,14 @@ public class HomeActivity extends Activity {
 
         List<Feed.Room> sugg = picks.sorted(without(Feed.suggested, pins));
         if (!sugg.isEmpty()) {
-            section("Suggested LIVE");
+            section("Recommended LIVE");
             View v = grid(sugg, sugg.size());
+            if (firstCard == null) firstCard = v;
+        }
+        List<Feed.Room> games = picks.sorted(without(Feed.gaming, pins));
+        if (!games.isEmpty()) {
+            section("🎮 Gaming LIVE");
+            View v = grid(games, games.size());
             if (firstCard == null) firstCard = v;
         }
 
@@ -215,6 +237,38 @@ public class HomeActivity extends Activity {
         if (restore != null) restore.requestFocus();
         else if (firstCard != null) firstCard.requestFocus();
     }
+
+    private TextView bannerView;
+
+    /** "★ @name just went LIVE" across the top for a few seconds. */
+    private void banner(List<String> users) {
+        if (bannerView == null) {
+            bannerView = text("", 22, Color.WHITE, true);
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setColor(Color.parseColor("#F0FE2C55"));
+            bg.setCornerRadius(dp(16));
+            bannerView.setBackground(bg);
+            bannerView.setPadding(dp(28), dp(14), dp(28), dp(14));
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+            lp.topMargin = dp(20);
+            root.addView(bannerView, lp);
+        }
+        StringBuilder sb = new StringBuilder("★ ");
+        for (int i = 0; i < users.size() && i < 3; i++) sb.append(i == 0 ? "@" : ", @").append(users.get(i));
+        if (users.size() > 3) sb.append(" and ").append(users.size() - 3).append(" more");
+        sb.append(users.size() == 1 ? " just went LIVE" : " just went LIVE").append("  —  they're at the top");
+        bannerView.setText(sb.toString());
+        bannerView.setVisibility(View.VISIBLE);
+        bannerView.bringToFront();
+        pointer.bringToFront();
+        ui.removeCallbacks(hideBanner);
+        ui.postDelayed(hideBanner, 10000);
+    }
+
+    private final Runnable hideBanner = new Runnable() {
+        @Override
+        public void run() { if (bannerView != null) bannerView.setVisibility(View.GONE); }
+    };
 
     private void section(String title) {
         TextView t = text(title, 22, Color.WHITE, true);
@@ -296,7 +350,8 @@ public class HomeActivity extends Activity {
         av.setScaleType(ImageView.ScaleType.CENTER_CROP);
         av.setBackgroundColor(Color.parseColor("#333333"));
         c.addView(av, new LinearLayout.LayoutParams(dp(78), dp(78)));
-        ImageLoader.load(av, r.avatar, dp(78));
+        // The stream's cover picture when there is one, else the avatar.
+        ImageLoader.load(av, r.cover != null ? r.cover : r.avatar, dp(78));
 
         LinearLayout texts = new LinearLayout(this);
         texts.setOrientation(LinearLayout.VERTICAL);

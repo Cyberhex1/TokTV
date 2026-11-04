@@ -32,7 +32,7 @@ Menu > **Log in (QR code)**, then scan the code with the TikTok app on your phon
 | 🔍 Search (top of the list, ≡ → Search) | Type a name, @username or topic. Matches in your lists show instantly; OK asks TikTok for LIVEs and accounts. Offline accounts can be pinned. The Fire TV phone app's keyboard works here. |
 | Back | Press twice to exit |
 
-Pinned creators get their own row at the top; when they're offline they stay there, dimmed. "Recently watched" counts LIVEs watched on this TV (TikTok's website doesn't share LIVE watch history from other devices).
+Rows: ★ Pinned, Following, Recommended and 🎮 Gaming, with the streams' cover pictures. Pinned creators stay in their row when offline (dimmed, with when they were last seen LIVE), and a banner pops up when one of them goes LIVE. "Recently watched" counts LIVEs watched on this TV (TikTok's website doesn't share LIVE watch history from other devices).
 
 **Free mouse**: turn on in ≡ or Settings. Arrows move a pointer (hold to go faster), OK clicks, hold OK to long-press, push past the top or bottom edge to scroll.
 
@@ -51,7 +51,7 @@ Pinned creators get their own row at the top; when they're offline they stay the
 
 **LIVE (website player)**: ▲ / ▼ switch between Lives, OK turns the sound on, ▶ reaches chat, Follow and the rest of the page.
 
-**LIVE (native player)**: ▲ / ▼ (or ⏪ ⏩) switch Lives. Read-only chat sits beside the video (side, text size and joins are in Settings); the arrow toward the chat side hides/shows it, the arrow toward the other side focuses the quick reactions (❤️ Like, 👋 😂 🔥 👏, hi!; ▲ ▼ pick, OK send, Back leave). In multi-guest LIVEs a blue box marks whoever is talking (read from the stream itself). OK shows stream info, ≡ options (quality, pin, free mouse, chat, website player), Back to the LIVE list.
+**LIVE (native player)**: ▲ / ▼ (or ⏪ ⏩) switch Lives. Read-only chat sits beside the video (side, text size and joins are in Settings); ◀ or ▶ hides/shows it (sending messages and reactions is planned for TokTV Remote on the phone). In multi-guest LIVEs a blue box marks whoever is talking (read from the stream itself). OK shows stream info, ≡ options (quality, pin, free mouse, chat, website player), Back to the LIVE list.
 
 ## Settings (Menu > Settings)
 

@@ -221,7 +221,7 @@ public class LiveActivity extends Activity {
         hint = text(15, Color.WHITE, false);
         hint.setBackgroundResource(R.drawable.card_bg);
         hint.setPadding(dp(18), dp(8), dp(18), dp(8));
-        hint.setText("▲ ▼  Switch LIVE      ◀ ▶  Chat / reactions      OK  Info      ≡  Options      Back  LIVE list");
+        hint.setText("▲ ▼  Switch LIVE      ◀ ▶  Chat      OK  Info      ≡  Options      Back  LIVE list");
         FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         hlp.bottomMargin = dp(24);
         root.addView(hint, hlp);
@@ -613,7 +613,7 @@ public class LiveActivity extends Activity {
 
     // ---------------------------------------------------------------- Chat panel
 
-    /** Read-only native chat beside the video, with quick reactions on the other side. */
+    /** Read-only native chat beside the video (sending is done from TokTV Remote). */
     private void toggleChat() {
         if (chatPanel.isOpen()) {
             chatPanel.close();
@@ -631,7 +631,6 @@ public class LiveActivity extends Activity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
         if (pointer != null && pointer.handleKey(e)) return true;
-        if (chatPanel != null && chatPanel.handleKey(e)) return true;
         if (e.getAction() != KeyEvent.ACTION_DOWN) {
             return e.getKeyCode() == KeyEvent.KEYCODE_BACK || super.dispatchKeyEvent(e);
         }
@@ -648,7 +647,7 @@ public class LiveActivity extends Activity {
                 return true;
             case KeyEvent.KEYCODE_DPAD_RIGHT:
             case KeyEvent.KEYCODE_DPAD_LEFT:
-                // Toward the chat side shows/hides chat (toward the reactions side is ChatPanel's).
+                // ◀ or ▶ shows/hides chat.
                 if (e.getRepeatCount() == 0) toggleChat();
                 return true;
             case KeyEvent.KEYCODE_DPAD_CENTER:

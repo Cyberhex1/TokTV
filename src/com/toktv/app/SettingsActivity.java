@@ -49,9 +49,9 @@ public class SettingsActivity extends Activity {
                 "live_player", Prefs.PLAYER_NATIVE, Prefs.PLAYER_OPTIONS);
         option("Native player quality", "Menu (≡) in the native player also changes this.",
                 "quality", "auto", Prefs.QUALITY_OPTIONS);
-        option("LIVE chat", "Read-only chat beside the video, with quick reactions on the other side. ◀ ▶ while watching.",
+        option("LIVE chat", "Read-only chat beside the video. ◀ or ▶ while watching shows or hides it.",
                 "native_chat", "1", Prefs.ONOFF);
-        option("Chat side", "Reactions go on the other side.", "chat_side", "right",
+        option("Chat side", "", "chat_side", "right",
                 new String[][]{{"right", "Right"}, {"left", "Left"}});
         option("Chat text size", "", "chat_size", "18",
                 new String[][]{{"16", "Small"}, {"18", "Medium"}, {"22", "Large"}, {"26", "Extra large"}});

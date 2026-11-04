@@ -33,32 +33,21 @@ import org.json.JSONObject;
 import java.io.ByteArrayInputStream;
 
 /**
- * Read-only LIVE chat drawn natively beside the video, plus a column of quick reactions on the
- * other side. The LIVE room page runs in a hidden WebView (video off, images off) and a small
+ * Read-only LIVE chat drawn natively beside the video (sending happens from TokTV Remote on the\n * phone). The LIVE room page runs in a hidden WebView (video off, images off) and a small
  * script hands each new chat line, join and gift to the app; nothing of the website is shown.
  */
 public class ChatPanel {
     private static final int MAX_LINES = 40;
-    private static final String[][] REACTIONS = {
-            {"like", "❤️", "Like"},
-            {"msg", "👋", "👋"},
-            {"msg", "😂", "😂"},
-            {"msg", "🔥", "🔥"},
-            {"msg", "👏", "👏"},
-            {"msg", "hi!", "hi!"},
-    };
 
     private final Activity a;
     private final FrameLayout root;
     private final Prefs prefs;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private WebView web;
-    private LinearLayout panel, lines, reactions;
+    private LinearLayout panel, lines;
     private TextView header;
     private boolean open;
     private String user;
-    private int reactIndex = -1;   // -1: reactions not focused
-    private long lastReactAt;
 
     public ChatPanel(Activity a, FrameLayout root, Prefs prefs) {
         this.a = a;
@@ -73,8 +62,6 @@ public class ChatPanel {
     public boolean isOpen() { return open; }
 
     public boolean chatOnRight() { return !"left".equals(prefs.get("chat_side", "right")); }
-
-    public boolean reactionsFocused() { return reactIndex >= 0; }
 
     // ---------------------------------------------------------------- Open / close
 
@@ -91,17 +78,13 @@ public class ChatPanel {
             loadPage();
         }
         panel.setVisibility(View.VISIBLE);
-        reactions.setVisibility(View.VISIBLE);
         panel.bringToFront();
-        reactions.bringToFront();
     }
 
     public void close() {
         open = false;
-        reactIndex = -1;
         user = null;
         if (panel != null) { root.removeView(panel); panel = null; }
-        if (reactions != null) { root.removeView(reactions); reactions = null; }
         if (web != null) {
             root.removeView(web);
             web.destroy();
@@ -141,31 +124,6 @@ public class ChatPanel {
         plp.setMargins(dp(16), dp(16), dp(16), dp(16));
         root.addView(panel, plp);
 
-        reactions = new LinearLayout(a);
-        reactions.setOrientation(LinearLayout.VERTICAL);
-        reactions.setGravity(Gravity.CENTER_HORIZONTAL);
-        for (String[] r : REACTIONS) {
-            TextView b = new TextView(a);
-            b.setText(r[1]);
-            b.setTextSize("hi!".equals(r[1]) ? 20 : 28);
-            b.setTextColor(Color.WHITE);
-            b.setGravity(Gravity.CENTER);
-            b.setTypeface(Typeface.DEFAULT_BOLD);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(76), dp(64));
-            lp.bottomMargin = dp(8);
-            reactions.addView(b, lp);
-        }
-        TextView hint = new TextView(a);
-        hint.setTextSize(12);
-        hint.setTextColor(Color.parseColor("#999999"));
-        hint.setGravity(Gravity.CENTER);
-        hint.setText(right ? "◀ to react" : "▶ to react");
-        reactions.addView(hint);
-        FrameLayout.LayoutParams rlp = new FrameLayout.LayoutParams(-2, -2,
-                (right ? Gravity.START : Gravity.END) | Gravity.CENTER_VERTICAL);
-        rlp.setMargins(dp(24), 0, dp(24), 0);
-        root.addView(reactions, rlp);
-        paintReactions();
         lines.setTag(size);
     }
 
@@ -176,21 +134,6 @@ public class ChatPanel {
 
     private float textSize() {
         try { return Float.parseFloat(prefs.get("chat_size", "18")); } catch (Exception e) { return 18; }
-    }
-
-    private void paintReactions() {
-        if (reactions == null) return;
-        for (int i = 0; i < REACTIONS.length; i++) {
-            View b = reactions.getChildAt(i);
-            GradientDrawable d = new GradientDrawable();
-            d.setCornerRadius(dp(16));
-            boolean sel = i == reactIndex;
-            d.setColor(Color.parseColor(sel ? "#FFFE2C55" : "#A0101010"));
-            if (sel) d.setStroke(dp(2), Color.WHITE);
-            b.setBackground(d);
-            b.setScaleX(sel ? 1.12f : 1f);
-            b.setScaleY(sel ? 1.12f : 1f);
-        }
     }
 
     private void clearLines() {
@@ -340,70 +283,46 @@ public class ChatPanel {
         }
     }
 
-    // ---------------------------------------------------------------- Reactions
+    // ---------------------------------------------------------------- For TokTV Remote (phone)
 
-    /** Arrow toward the reactions side focuses them; returns true if the key was used. */
-    public boolean handleKey(KeyEvent e) {
-        if (!open) return false;
-        int code = e.getKeyCode();
-        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
-        int toward = chatOnRight() ? KeyEvent.KEYCODE_DPAD_LEFT : KeyEvent.KEYCODE_DPAD_RIGHT;
-        int away = chatOnRight() ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
-        if (reactIndex < 0) {
-            if (code == toward) {
-                if (down) {
-                    reactIndex = 0;
-                    paintReactions();
-                }
-                return true;
-            }
-            return false;
-        }
-        switch (code) {
-            case KeyEvent.KEYCODE_DPAD_UP:
-                if (down) { reactIndex = Math.max(0, reactIndex - 1); paintReactions(); }
-                return true;
-            case KeyEvent.KEYCODE_DPAD_DOWN:
-                if (down) { reactIndex = Math.min(REACTIONS.length - 1, reactIndex + 1); paintReactions(); }
-                return true;
-            case KeyEvent.KEYCODE_DPAD_CENTER:
-            case KeyEvent.KEYCODE_ENTER:
-                if (down && e.getRepeatCount() == 0) react(REACTIONS[reactIndex]);
-                return true;
-            case KeyEvent.KEYCODE_BACK:
-                if (!down) { reactIndex = -1; paintReactions(); }
-                return true;
-        }
-        if (code == away || code == toward) {
-            if (down && code == away) { reactIndex = -1; paintReactions(); }
-            return true;
-        }
-        return false;
+    private final java.util.LinkedList<JSONObject> recent = new java.util.LinkedList<>();
+
+    /** The last chat lines (for the phone remote's chat mirror). */
+    public synchronized JSONArray recentLines() {
+        JSONArray a = new JSONArray();
+        for (JSONObject o : recent) a.put(o);
+        return a;
     }
 
-    private void react(String[] r) {
-        long now = System.currentTimeMillis();
-        if (now - lastReactAt < 1500) return;   // no accidental spam
-        lastReactAt = now;
-        if (web == null) return;
-        String js;
-        if ("like".equals(r[0])) {
-            js = "(function(){var b=document.querySelector('[data-e2e=\"room-chat-like-btn\"]');if(!b)return 'none';b.click();return 'ok';})()";
-        } else {
-            js = "(function(t){var f=document.querySelector('[data-e2e=\"room-chat-input-field\"]');if(!f)return 'none';"
-                    + "var ed=f.matches('[contenteditable],textarea,input')?f:(f.querySelector('[contenteditable],textarea,input')||f);"
-                    + "ed.focus();if(!document.execCommand('insertText',false,t)){ed.textContent=t;ed.dispatchEvent(new InputEvent('input',{bubbles:true,data:t}));}"
-                    + "setTimeout(function(){var b=document.querySelector('[data-e2e=\"room-chat-send-btn\"]');if(b)b.click();"
-                    + "else ed.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',keyCode:13,bubbles:true}));},250);return 'ok';})("
-                    + JSONObject.quote(r[1]) + ")";
-        }
-        final String label = r[2];
-        web.evaluateJavascript(js, new android.webkit.ValueCallback<String>() {
-            @Override
-            public void onReceiveValue(String v) {
-                Toast.makeText(a, "\"ok\"".equals(v) ? "Sent " + label : "Couldn't send yet: chat is still loading",
-                        Toast.LENGTH_SHORT).show();
-            }
-        });
+    private synchronized void keep(JSONObject o) {
+        try { o.put("t", System.currentTimeMillis()); } catch (Exception ignored) { }
+        recent.add(o);
+        while (recent.size() > 60) recent.removeFirst();
+    }
+
+    public String currentUser() { return open ? user : null; }
+
+    /** Sends a chat message as the logged-in user, through the LIVE page's own chat box. */
+    public void sendMessage(String text, android.webkit.ValueCallback<String> done) {
+        if (web == null) { if (done != null) done.onReceiveValue("\"nochat\""); return; }
+        String js = "(function(t){var f=document.querySelector('[data-e2e=\"room-chat-input-field\"]');if(!f)return 'none';"
+                + "var ed=f.matches('[contenteditable],textarea,input')?f:(f.querySelector('[contenteditable],textarea,input')||f);"
+                + "ed.focus();if(!document.execCommand('insertText',false,t)){ed.textContent=t;ed.dispatchEvent(new InputEvent('input',{bubbles:true,data:t}));}"
+                + "setTimeout(function(){var b=document.querySelector('[data-e2e=\"room-chat-send-btn\"]');if(b)b.click();"
+                + "else ed.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',keyCode:13,bubbles:true}));},250);return 'ok';})("
+                + JSONObject.quote(text) + ")";
+        web.evaluateJavascript(js, done);
+    }
+
+    /** Taps the LIVE page's like (heart) button. */
+    public void like(android.webkit.ValueCallback<String> done) {
+        if (web == null) { if (done != null) done.onReceiveValue("\"nochat\""); return; }
+        web.evaluateJavascript("(function(){var b=document.querySelector('[data-e2e=\"room-chat-like-btn\"]');if(!b)return 'none';b.click();return 'ok';})()", done);
+    }
+
+    /** Runs a script in the hidden LIVE page (used by the remote for follow and gifts). */
+    public void runInPage(String js, android.webkit.ValueCallback<String> done) {
+        if (web == null) { if (done != null) done.onReceiveValue("\"nochat\""); return; }
+        web.evaluateJavascript(js, done);
     }
 }

@@ -85,6 +85,43 @@ public final class Picks {
         prefs.put("recent", r.toString());
     }
 
+    // ---------------------------------------------------------------- Last seen LIVE
+
+    /** Remembers that these creators were LIVE now (for "last LIVE 2 h ago" on offline pins). */
+    public void markSeenLive(List<String> users) {
+        JSONObject r;
+        try { r = new JSONObject(prefs.get("last_live", "{}")); } catch (Exception e) { r = new JSONObject(); }
+        long now = System.currentTimeMillis();
+        try {
+            for (String u : users) r.put(u.toLowerCase(), now);
+            if (r.length() > 400) {
+                List<String> keys = new ArrayList<>();
+                for (Iterator<String> it = r.keys(); it.hasNext(); ) keys.add(it.next());
+                final JSONObject fr = r;
+                Collections.sort(keys, new Comparator<String>() {
+                    @Override
+                    public int compare(String a, String b) { return Long.compare(fr.optLong(a), fr.optLong(b)); }
+                });
+                for (int i = 0; i < keys.size() - 400; i++) r.remove(keys.get(i));
+            }
+        } catch (Exception ignored) { }
+        prefs.put("last_live", r.toString());
+    }
+
+    public long lastSeenLive(String user) {
+        try { return new JSONObject(prefs.get("last_live", "{}")).optLong(user.toLowerCase(), 0); } catch (Exception e) { return 0; }
+    }
+
+    public static String ago(long t) {
+        long m = (System.currentTimeMillis() - t) / 60000;
+        if (m < 1) return "just now";
+        if (m < 60) return m + " min ago";
+        long h = m / 60;
+        if (h < 24) return h + " h ago";
+        long d = h / 24;
+        return d == 1 ? "yesterday" : d + " days ago";
+    }
+
     // ---------------------------------------------------------------- Sorting
 
     public String sort() { return prefs.get("sort", SORT_TIKTOK); }

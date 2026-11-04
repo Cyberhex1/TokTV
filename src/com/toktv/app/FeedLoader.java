@@ -32,18 +32,18 @@ import java.util.Map;
 public final class FeedLoader {
     public interface Callback {
         /** following is null if the page never asked for it (usually: not logged in). */
-        void onFeed(List<Feed.Room> following, List<Feed.Room> suggested, boolean loggedIn);
+        void onFeed(List<Feed.Room> following, List<Feed.Room> suggested, List<Feed.Room> gaming, boolean loggedIn);
     }
 
     private static final long TIMEOUT_MS = 45000;
-    private static final long WAIT_FOR_SUGGESTED_MS = 6000;
+    private static final long WAIT_FOR_SUGGESTED_MS = 12000;
 
     private final Activity host;
     private final ViewGroup parent;
     private final Callback cb;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private WebView web;
-    private List<Feed.Room> follow, sugg;
+    private List<Feed.Room> follow, sugg, gaming;
     private boolean done;
 
     public FeedLoader(Activity host, ViewGroup parent, Callback cb) {
@@ -80,8 +80,9 @@ public final class FeedLoader {
                 return intercept(r);
             }
         });
-        // It has to be attached to run normally; 1 px, behind everything.
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(1, 1);
+        // Full size (the page only fetches its Recommended and Gaming rows when it lays them out),
+        // but behind the app's own opaque screen, so it is never seen.
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -1);
         parent.addView(web, 0, lp);
         web.loadUrl("https://www.tiktok.com/live");
         ui.postDelayed(timeout, TIMEOUT_MS);
@@ -106,7 +107,7 @@ public final class FeedLoader {
         if (done) return;
         done = true;
         destroy();
-        cb.onFeed(follow, sugg, loggedIn());
+        cb.onFeed(follow, sugg, gaming, loggedIn());
     }
 
     private void destroy() {
@@ -128,8 +129,11 @@ public final class FeedLoader {
         host = host == null ? "" : host.toLowerCase();
         if (done) return empty();
         if (url.contains("/webcast/feed/")) {
-            if (url.contains("channel_id=42&") || url.endsWith("channel_id=42")) return proxyFeed(r, true);
-            if (url.contains("channel_id=87&") || url.endsWith("channel_id=87")) return proxyFeed(r, false);
+            int ci = url.indexOf("channel_id=");
+            android.util.Log.i("TokTV", "feed request " + (ci >= 0 ? url.substring(ci, Math.min(url.length(), ci + 20)) : "?"));
+            if (url.contains("channel_id=42&") || url.endsWith("channel_id=42")) return proxyFeed(r, 0);
+            if (url.contains("channel_id=87&") || url.endsWith("channel_id=87")) return proxyFeed(r, 1);
+            if (url.contains("channel_id=1111006&") || url.endsWith("channel_id=1111006")) return proxyFeed(r, 2);
             return empty();
         }
         if (isHeavy(host, url)) return empty();
@@ -145,18 +149,18 @@ public final class FeedLoader {
                 || path.endsWith(".webp") || path.endsWith(".jpg") || path.endsWith(".jpeg") || path.endsWith(".png")
                 || path.endsWith(".gif") || path.endsWith(".woff") || path.endsWith(".woff2") || path.endsWith(".ttf")
                 || path.endsWith(".mp3") || path.contains("~tplv")) return true;
-        if (host.startsWith("im-") || url.contains("/webcast/im/") || url.contains("/linkmic") || url.contains("/game_feed/")
+        if (host.startsWith("im-") || url.contains("/webcast/im/") || url.contains("/linkmic") 
                 || url.contains("/event/feed") || url.contains("/event/recommend") || url.contains("/wallet_api/")) return true;
         return MainActivity.isBlocked(host);
     }
 
-    private WebResourceResponse proxyFeed(WebResourceRequest r, final boolean isFollow) {
+    private WebResourceResponse proxyFeed(WebResourceRequest r, final int kind) {
         String[] body = new String[1];
         WebResourceResponse resp = proxy(r, body);
         final List<Feed.Room> rooms = body[0] == null ? null : Feed.parse(body[0]);
         ui.post(new Runnable() {
             @Override
-            public void run() { onList(isFollow, rooms); }
+            public void run() { onList(kind, rooms); }
         });
         return resp;
     }
@@ -203,10 +207,11 @@ public final class FeedLoader {
         }
     }
 
-    private void onList(boolean isFollow, List<Feed.Room> rooms) {
+    private void onList(int kind, List<Feed.Room> rooms) {
+        android.util.Log.i("TokTV", "feed list " + kind + ": " + (rooms == null ? "unreadable" : rooms.size() + " rooms"));
         if (done || rooms == null) return;
-        if (isFollow) follow = rooms; else sugg = rooms;
-        if (follow != null && sugg != null) finish();
+        if (kind == 0) follow = rooms; else if (kind == 1) sugg = rooms; else gaming = rooms;
+        if (follow != null && sugg != null && gaming != null) finish();
         else if (follow != null) {
             ui.removeCallbacks(finishRunnable);
             ui.postDelayed(finishRunnable, WAIT_FOR_SUGGESTED_MS);
