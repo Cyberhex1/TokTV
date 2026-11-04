@@ -160,7 +160,7 @@ public class MainActivity extends Activity {
         w.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onProgressChanged(WebView view, int p) {
-                if (p >= 60) inject();
+                if (p >= 80) inject();
             }
 
             @Override
@@ -216,9 +216,20 @@ public class MainActivity extends Activity {
         }
     }
 
+    private boolean injectPending;
+
+    /** Injects tv.js once per page: asks first, so the big script isn't re-parsed on every progress tick. */
     private void inject() {
-        String settings = settingsJson();
-        js("window.__TV_SETTINGS=" + settings + ";" + tvScript);
+        if (injectPending || web == null) return;
+        injectPending = true;
+        web.evaluateJavascript("!!window.__tv", new ValueCallback<String>() {
+            @Override
+            public void onReceiveValue(String has) {
+                injectPending = false;
+                if ("true".equals(has)) return;
+                js("window.__TV_SETTINGS=" + settingsJson() + ";" + tvScript);
+            }
+        });
     }
 
     private void js(String code) {

@@ -13,7 +13,7 @@
   var FOCUS = '__tv-focus';
   var focused = null;
   var mode = 'feed';          // 'feed' = Up/Down changes video; 'nav' = move a focus box around the page
-  var lastOk = 0, lastMove = 0;
+  var lastOk = 0, lastMove = 0, lastNav = 0;
   var unmuted = [];
 
   // ------------------------------------------------------------------ styles
@@ -22,10 +22,9 @@
     var st = document.createElement('style');
     st.id = '__tv-style';
     st.textContent =
-      'html,body,*{cursor:none!important}' +
+      'html,body{cursor:none!important}' +
       '.' + FOCUS + '{outline:4px solid #25F4EE!important;outline-offset:2px!important;' +
-      'box-shadow:0 0 0 8px rgba(37,244,238,.28)!important;border-radius:10px!important;' +
-      'transition:outline-color .1s;z-index:2147483000;}' +
+      'border-radius:10px!important;}' +
       '::-webkit-scrollbar{display:none!important}' +
       (S.hidePromos ?
         '[class*="DivPromotion"],[class*="AppPromote"],[class*="DownloadApp"],[class*="GetAppContainer"],' +
@@ -98,8 +97,7 @@
 
   // ------------------------------------------------------------------ focus box
   var SEL = 'a[href],button,input,textarea,select,[role="button"],[role="tab"],[role="link"],[role="menuitem"],' +
-    '[role="option"],[role="switch"],[role="checkbox"],[tabindex]:not([tabindex="-1"]),[contenteditable="true"],' +
-    '[data-e2e$="-icon"],[data-e2e*="live-card"],[data-e2e*="user-card"]';
+    '[role="option"],[role="switch"],[role="checkbox"],[tabindex="0"],[contenteditable="true"]';
 
   function scopeRoot() {
     var ds = document.querySelectorAll('[role="dialog"],[aria-modal="true"],[class*="DivModalContainer"],[class*="ModalContent"]');
@@ -111,19 +109,24 @@
 
   function candidates() {
     var root = scopeRoot();
-    var list = root.querySelectorAll(SEL), out = [];
+    var list = root.querySelectorAll(SEL), out = [], W = vw(), H = vh();
     for (var i = 0; i < list.length; i++) {
       var el = list[i];
-      if (el.disabled || el.getAttribute('aria-hidden') === 'true') continue;
+      if (el.disabled) continue;
+      // Cheap geometry check first; only near-screen elements get the costly style check.
+      var r = el.getBoundingClientRect();
+      if (r.width < 6 || r.height < 6 || r.bottom < -H || r.top > H * 2 || r.right < 0 || r.left > W) continue;
+      if (el.getAttribute('aria-hidden') === 'true') continue;
       // Skip wrappers whose focusable child is what you actually want.
-      if (el.tagName !== 'INPUT' && el.querySelector && el.querySelector('button,a[href]') && el.getBoundingClientRect().width > vw() * 0.6) continue;
+      if (r.width > W * 0.6 && el.tagName !== 'INPUT' && el.querySelector('button,a[href]')) continue;
       if (visible(el)) out.push(el);
     }
+    var set = new Set(out);
     // Drop elements nested inside another candidate with the same box (icon inside button).
     return out.filter(function (el) {
       var p = el.parentElement;
-      while (p && p !== document.body) {
-        if (out.indexOf(p) >= 0) {
+      for (var depth = 0; p && p !== document.body && depth < 6; depth++) {
+        if (set.has(p)) {
           var a = el.getBoundingClientRect(), b = p.getBoundingClientRect();
           if (Math.abs(a.width - b.width) < 24 && Math.abs(a.height - b.height) < 24) return false;
           break;
@@ -522,8 +525,11 @@
         else if (k === 'right') enterNav();
         return;
       }
-      if (k === 'ok') activate();
-      else move(k);
+      if (k === 'ok') { activate(); return; }
+      var now = Date.now();
+      if (repeat > 0 && now - lastNav < 140) return;
+      lastNav = now;
+      move(k);
     },
     back: function () {
       var ae = document.activeElement;
@@ -562,7 +568,7 @@
   addStyle();
   document.addEventListener('DOMContentLoaded', addStyle);
   // Keep the hidden-cursor style and the remembered Lives list fresh as TikTok re-renders.
-  setInterval(function () { addStyle(); if (focused && !document.contains(focused)) focused = null; }, 2000);
+  setInterval(function () { if (document.hidden) return; addStyle(); if (focused && !focused.isConnected) focused = null; }, 4000);
   setTimeout(rememberLives, 2000);
   setTimeout(ensureAudio, 2000);
 })();
