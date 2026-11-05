@@ -67,13 +67,15 @@ public class SettingsActivity extends Activity {
                 "auto_unmute", "1", Prefs.ONOFF);
         option("Hide \"Get the app\" banners", "", "hide_promos", "1", Prefs.ONOFF);
 
-        action("Log out and clear data", "Removes your TikTok login and cookies from this app.", new Runnable() {
+        updateSection();
+
+        action("Log out and clear data","Removes your TikTok login and cookies from this app.", new Runnable() {
             @Override
             public void run() { confirmLogout(); }
         });
 
         TextView about = new TextView(this);
-        about.setText("TokTV 2.3 LIVE · sideload build");
+        about.setText("TokTV " + Updater.currentName(this) + " LIVE · github.com/" + Updater.REPO);
         about.setTextColor(Color.GRAY);
         about.setTextSize(14);
         about.setPadding(dp(16), dp(24), 0, 0);
@@ -155,6 +157,179 @@ public class SettingsActivity extends Activity {
             @Override
             public void onClick(View v) { r.run(); }
         });
+    }
+
+    // ---------------------------------------------------------------- Update (GitHub Releases)
+
+    private TextView updStatus, updNotes, updInstallLabel;
+    private Updater.Release updRelease;
+    private boolean updBusy;
+
+    private void updateSection() {
+        TextView h = new TextView(this);
+        h.setText("Update");
+        h.setTextColor(Color.WHITE);
+        h.setTextSize(24);
+        h.setTypeface(Typeface.DEFAULT_BOLD);
+        h.setPadding(dp(16), dp(24), 0, dp(8));
+        list.addView(h);
+
+        updStatus = new TextView(this);
+        updStatus.setTextColor(Color.parseColor("#25F4EE"));
+        updStatus.setTextSize(18);
+        updStatus.setPadding(dp(16), 0, 0, dp(4));
+        String latest = prefs.get("update_latest", "");
+        updStatus.setText("This TokTV: " + Updater.currentName(this)
+                + (latest.isEmpty() ? " · Latest: not checked yet" : " · Latest on GitHub: " + latest));
+        list.addView(updStatus);
+
+        updNotes = new TextView(this);
+        updNotes.setTextColor(Color.parseColor("#BBBBBB"));
+        updNotes.setTextSize(14);
+        updNotes.setPadding(dp(16), 0, dp(16), dp(10));
+        updNotes.setVisibility(View.GONE);
+        list.addView(updNotes);
+
+        action("Check now", "Looks for a newer TokTV on GitHub (" + Updater.REPO + ").", new Runnable() {
+            @Override
+            public void run() { checkUpdate(); }
+        });
+        LinearLayout inst = row("Download & install", "Downloads the new TokTV, checks it's genuine, then opens the Fire TV installer.");
+        updInstallLabel = (TextView) ((LinearLayout) inst.getChildAt(0)).getChildAt(0);
+        inst.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) { downloadUpdate(); }
+        });
+        option("Check automatically on launch", "At most once a day. A short message appears when there's an update.",
+                "update_auto", "1", Prefs.ONOFF);
+    }
+
+    private static String reason(Exception e) {
+        if (e instanceof java.net.UnknownHostException) return "No internet connection.";
+        if (e instanceof java.net.SocketTimeoutException) return "GitHub didn't answer in time. Try again.";
+        String m = e.getMessage();
+        return m == null || m.isEmpty() ? e.getClass().getSimpleName() : m;
+    }
+
+    private void checkUpdate() {
+        if (updBusy) return;
+        updBusy = true;
+        updStatus.setText("Checking GitHub…");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final Updater.Release r = Updater.check(SettingsActivity.this);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() { showRelease(r); }
+                    });
+                } catch (final Exception e) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            updStatus.setText("This TokTV: " + Updater.currentName(SettingsActivity.this) + " · Couldn't check: " + reason(e));
+                        }
+                    });
+                } finally {
+                    updBusy = false;
+                }
+            }
+        }, "TokTVUpdate").start();
+    }
+
+    private void showRelease(Updater.Release r) {
+        updRelease = r;
+        String cur = Updater.currentName(this);
+        if (r.apkUrl == null) {
+            updStatus.setText("This TokTV: " + cur + " · Latest " + r.version + " has no TokTV.apk to download.");
+        } else if (r.newer) {
+            updStatus.setText("This TokTV: " + cur + " · Update available: " + r.version);
+            updInstallLabel.setText("Download & install " + r.version);
+        } else {
+            updStatus.setText("This TokTV: " + cur + " · Latest on GitHub: " + r.version + " · You're up to date");
+        }
+        if (r.notes != null && !r.notes.isEmpty()) {
+            String n = r.notes.length() > 900 ? r.notes.substring(0, 900) + "…" : r.notes;
+            updNotes.setText("What's new in " + r.version + ":\n" + n);
+            updNotes.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void downloadUpdate() {
+        if (updBusy) return;
+        if (updRelease == null) { toast("Checking first…"); checkUpdate(); return; }
+        if (!updRelease.newer) { toast("You already have the latest TokTV."); return; }
+        if (!Updater.canInstall(this)) { explainUnknownSources(); return; }
+        updBusy = true;
+        final Updater.Release r = updRelease;
+        updStatus.setText("Downloading TokTV " + r.version + "…");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final java.io.File apk = Updater.download(SettingsActivity.this, r, new Updater.Progress() {
+                        long lastPct = -1;
+
+                        @Override
+                        public void onProgress(final long done, final long total) {
+                            final long pct = total > 0 ? done * 100 / total : -1;
+                            if (pct == lastPct) return;
+                            lastPct = pct;
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    updStatus.setText("Downloading TokTV " + r.version + "… "
+                                            + (pct >= 0 ? pct + "%" : (done / 1024) + " KB"));
+                                }
+                            });
+                        }
+                    });
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            updStatus.setText("Checked: genuine TokTV " + r.version + ". Opening the installer…");
+                            try {
+                                Updater.install(SettingsActivity.this, apk);
+                            } catch (Exception e) {
+                                updStatus.setText("Couldn't open the installer: " + reason(e));
+                            }
+                        }
+                    });
+                } catch (final Exception e) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            updStatus.setText("Not installed: " + reason(e));
+                            new AlertDialog.Builder(SettingsActivity.this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                                    .setTitle("Update not installed")
+                                    .setMessage(reason(e))
+                                    .setPositiveButton("OK", null)
+                                    .show();
+                        }
+                    });
+                } finally {
+                    updBusy = false;
+                }
+            }
+        }, "TokTVDownload").start();
+    }
+
+    private void explainUnknownSources() {
+        new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                .setTitle("Allow TokTV to install updates")
+                .setMessage("Fire TV needs your OK once.\n\nSettings → My Fire TV → Developer options → Install unknown apps → TokTV → On.\n"
+                        + "(On older Fire TVs: Developer options → Apps from Unknown Sources → On.)\n\nThen come back and choose Download & install again.")
+                .setPositiveButton("Open settings", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) { Updater.openUnknownSources(SettingsActivity.this); }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void toast(String s) {
+        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
     }
 
     private void confirmLogout() {

@@ -101,6 +101,8 @@ h3{margin:18px 0 8px;font-size:17px}
     <div class="row" style="margin-top:8px"><button class="btn" data-k="rew">⏪</button><button class="btn" data-k="playpause">⏯</button><button class="btn" data-k="ff">⏩</button></div>
     <div class="row" style="margin-top:8px"><button class="btn" data-v="down">🔉</button><button class="btn" data-v="mute">🔇</button><button class="btn" data-v="up">🔊</button></div>
     <div class="row" style="margin-top:8px"><button class="btn" id="mouse">🖱 Free mouse</button><button class="btn" id="quality">⚙ Quality</button></div>
+    <div class="row" style="margin-top:8px"><button class="btn" id="upd">⬆ Check for TokTV update</button></div>
+    <p class="dim" id="updmsg"></p>
   </section>
 </main>
 
@@ -303,6 +305,15 @@ h3{margin:18px 0 8px;font-size:17px}
   $('homebtn').onclick = function () { act('home'); };
   $('mouse').onclick = function () { act('mouse', {}, 'Free mouse toggled'); };
   $('quality').onclick = function () { act('quality', {}, 'Quality changed'); };
+  $('upd').onclick = function () {
+    $('updmsg').textContent = 'Checking GitHub…';
+    api('update', {}).then(function (j) {
+      if (!j.ok) { $('updmsg').textContent = j.error || 'Couldn\'t check'; return; }
+      $('updmsg').textContent = j.available
+        ? 'TokTV ' + j.latest + ' is available (you have ' + j.current + '). On the TV: ≡ → Settings → Update → Download & install.'
+        : 'Up to date: TokTV ' + j.current + ' (latest ' + j.latest + ').';
+    }).catch(function () { $('updmsg').textContent = ''; });
+  };
 
   function start() {
     if (started) return; started = true;

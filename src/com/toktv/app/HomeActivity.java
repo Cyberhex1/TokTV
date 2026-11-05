@@ -111,6 +111,7 @@ public class HomeActivity extends Activity {
 
         // TokTV Remote keeps running once it has been set up (only while TokTV is open).
         if ("1".equals(prefs.get("remote_on", "0"))) RemoteServer.get(this).start();
+        Updater.checkOnLaunch(this);
 
         render();
         if (!FeedLoader.loggedIn()) {

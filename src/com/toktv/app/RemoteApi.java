@@ -65,6 +65,7 @@ final class RemoteApi {
                 case "prev": return liveCall("prev");
                 case "mouse": return mouse(c);
                 case "volume": return volume(c, req.optString("dir"));
+                case "update": return update(c);
                 default: return "{\"error\":\"unknown\"}";
             }
         } catch (Exception e) {
@@ -295,6 +296,23 @@ final class RemoteApi {
         int d = "up".equals(dir) ? AudioManager.ADJUST_RAISE : "down".equals(dir) ? AudioManager.ADJUST_LOWER : AudioManager.ADJUST_TOGGLE_MUTE;
         am.adjustStreamVolume(AudioManager.STREAM_MUSIC, d, AudioManager.FLAG_SHOW_UI);
         return "{\"ok\":true}";
+    }
+
+    /** Checks GitHub for a newer TokTV (installing stays on the TV: Settings → Update). */
+    private static String update(Context c) throws Exception {
+        JSONObject o = new JSONObject();
+        o.put("current", Updater.currentName(c));
+        try {
+            Updater.Release r = Updater.check(c);
+            o.put("ok", true);
+            o.put("latest", r.version);
+            o.put("available", r.newer);
+            o.put("notes", r.notes);
+        } catch (Exception e) {
+            o.put("ok", false);
+            o.put("error", "Couldn't check: " + (e instanceof java.net.UnknownHostException ? "no internet" : e.getMessage()));
+        }
+        return o.toString();
     }
 
     // ---------------------------------------------------------------- In the LIVE page (send, like, follow, gifts)
