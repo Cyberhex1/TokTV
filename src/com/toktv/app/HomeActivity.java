@@ -416,7 +416,9 @@ public class HomeActivity extends Activity {
 
     private String focusedUser() {
         View f = getCurrentFocus();
-        return f != null && f.getTag() instanceof String ? (String) f.getTag() : null;
+        if (f == null || !(f.getTag() instanceof String)) return null;
+        String t = (String) f.getTag();
+        return t.startsWith("#") ? null : t;   // "#search" etc. are UI tags, not users
     }
 
     private void togglePin(String user) {

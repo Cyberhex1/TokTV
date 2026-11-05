@@ -186,6 +186,8 @@ h3{margin:18px 0 8px;font-size:17px}
     if (!state.live) return;
     api('chat?since=' + chatSince).then(function (j) {
       var box = $('chat'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+      var ph = box.querySelector('.ph');
+      if (ph && (j.lines || []).length) box.removeChild(ph);
       (j.lines || []).forEach(function (x) {
         chatSince = Math.max(chatSince, x.t || 0);
         var d = document.createElement('div');
@@ -195,7 +197,9 @@ h3{margin:18px 0 8px;font-size:17px}
       });
       while (box.children.length > 120) box.removeChild(box.firstChild);
       if (atEnd) box.scrollTop = box.scrollHeight;
-      if (!j.open && !box.children.length) box.innerHTML = '<div class="dim">Chat is hidden on the TV. Tap "Show chat on TV" to see it here and send messages.</div>';
+      if (!box.children.length || (ph && !(j.lines || []).length)) box.innerHTML = j.open
+        ? '<div class="dim ph">Waiting for chat… (it can take a few seconds after a LIVE opens)</div>'
+        : '<div class="dim ph">Chat is hidden on the TV. Tap "Show chat on TV" to see it here and send messages.</div>';
     }).catch(function () {});
   }
   var colors = ['#25F4EE', '#FFC94D', '#8AB4FF', '#B6F36A', '#FF9AC2', '#FFA45C', '#C7A6FF'];
@@ -238,7 +242,7 @@ h3{margin:18px 0 8px;font-size:17px}
         b.onclick = function () {
           var who = state.live ? '@' + state.live.user : 'this LIVE';
           if (!confirm('Send ' + g.name + ' to ' + who + '?\nThis spends ' + g.coins + ' coin' + (g.coins === 1 ? '' : 's') + ' from your TikTok balance.')) return;
-          act('gift', { name: g.name }, 'Sent ' + g.name);
+          act('gift', { name: g.name, confirmed: true }, 'Sent ' + g.name);
         };
         $('gifts').appendChild(b);
       });

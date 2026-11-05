@@ -54,7 +54,10 @@ final class RemoteApi {
                 case "like": return pageAction("like", null);
                 case "follow": return pageAction("follow", null);
                 case "gifts": return pageAction("gifts", null);
-                case "gift": return pageAction("gift", req.optString("name"));
+                case "gift":
+                    // Gifts spend real coins: only after the phone's confirm step says yes.
+                    if (!req.optBoolean("confirmed", false)) return err("Gifts need a confirm on the phone first");
+                    return pageAction("gift", req.optString("name"));
                 case "pin": return pin(c, req.optString("user"));
                 case "chat_toggle": return liveCall("chat");
                 case "quality": return liveCall("quality");
@@ -121,7 +124,10 @@ final class RemoteApi {
         Picks picks = new Picks(new Prefs(c));
         JSONObject o = new JSONObject();
         JSONArray pins = new JSONArray();
-        for (String u : picks.pinned()) {
+        java.util.List<String> order = new java.util.ArrayList<>();
+        for (String u : picks.pinned()) if (Feed.findListed(u) != null) order.add(u);   // LIVE ones first
+        for (String u : picks.pinned()) if (Feed.findListed(u) == null) order.add(u);
+        for (String u : order) {
             Feed.Room r = Feed.findListed(u);
             JSONObject p = new JSONObject();
             p.put("user", u);
