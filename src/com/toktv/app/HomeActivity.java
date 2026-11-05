@@ -109,6 +109,9 @@ public class HomeActivity extends Activity {
         pointer = new Pointer(this, root);
         root.addView(pointer, new FrameLayout.LayoutParams(-1, -1));
 
+        // TokTV Remote keeps running once it has been set up (only while TokTV is open).
+        if ("1".equals(prefs.get("remote_on", "0"))) RemoteServer.get(this).start();
+
         render();
         if (!FeedLoader.loggedIn()) {
             spinner.setVisibility(View.GONE);
@@ -504,6 +507,7 @@ public class HomeActivity extends Activity {
     private void showMainMenu(boolean loggedIn) {
         final String[] items = {
                 "Refresh",
+                "📱 Phone remote (TokTV Remote)",
                 "Free mouse: " + (pointer.isOn() ? "On" : "Off"),
                 "Search",
                 "LIVE page (website)",
@@ -519,13 +523,14 @@ public class HomeActivity extends Activity {
                     public void onClick(DialogInterface d, int which) {
                         switch (which) {
                             case 0: refresh(); break;
-                            case 1: setMouse(!pointer.isOn()); break;
-                            case 2: openSearch(); break;
-                            case 3: openWebsite("https://www.tiktok.com/live"); break;
-                            case 4: openWebsite(Prefs.HOME_URL); break;
-                            case 5: openLogin(); break;
-                            case 6: startActivity(new Intent(HomeActivity.this, SettingsActivity.class)); break;
-                            case 7: finish(); break;
+                            case 1: showRemote(); break;
+                            case 2: setMouse(!pointer.isOn()); break;
+                            case 3: openSearch(); break;
+                            case 4: openWebsite("https://www.tiktok.com/live"); break;
+                            case 5: openWebsite(Prefs.HOME_URL); break;
+                            case 6: openLogin(); break;
+                            case 7: startActivity(new Intent(HomeActivity.this, SettingsActivity.class)); break;
+                            case 8: finish(); break;
                         }
                     }
                 })
@@ -611,7 +616,90 @@ public class HomeActivity extends Activity {
     protected void onDestroy() {
         if (loader != null) loader.cancel();
         ui.removeCallbacksAndMessages(null);
+        if (isFinishing()) RemoteServer.get(this).stop();
         super.onDestroy();
+    }
+
+    // ---------------------------------------------------------------- TokTV Remote (phone)
+
+    /** Starts the phone remote and shows the QR code to pair a phone. */
+    private void showRemote() {
+        final RemoteServer srv = RemoteServer.get(this);
+        prefs.put("remote_on", "1");
+        srv.start();
+        final String url = srv.url();
+        if (url == null) {
+            toast("The Fire TV isn't on a network right now.");
+            return;
+        }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        box.setPadding(dp(24), dp(12), dp(24), dp(8));
+        final ImageView qr = new ImageView(this);
+        qr.setImageBitmap(qrBitmap(url, dp(220)));
+        box.addView(qr, new LinearLayout.LayoutParams(dp(220), dp(220)));
+        TextView how = text("Scan with your phone's camera (same Wi-Fi as the TV).\nThen \"Add to Home Screen\" to open it like an app.", 15,
+                Color.parseColor("#DDDDDD"), false);
+        how.setGravity(Gravity.CENTER);
+        how.setPadding(0, dp(12), 0, dp(4));
+        box.addView(how);
+        final TextView link = text("Or open " + srv.baseUrl() + " and enter", 14, Color.parseColor("#AAAAAA"), false);
+        link.setGravity(Gravity.CENTER);
+        box.addView(link);
+        String c = srv.pairCode();
+        final TextView codeView = text(c.substring(0, 3) + " " + c.substring(3), 34, Color.WHITE, true);
+        codeView.setGravity(Gravity.CENTER);
+        codeView.setLetterSpacing(0.15f);
+        box.addView(codeView);
+        TextView once = text("One-time code: works for one phone, for 10 minutes.", 13, Color.parseColor("#888888"), false);
+        once.setGravity(Gravity.CENTER);
+        box.addView(once);
+        final AlertDialog dlg = new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                .setTitle("📱 TokTV Remote")
+                .setView(box)
+                .setPositiveButton("Done", null)
+                .setNeutralButton("Unpair all phones", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        srv.newKey();
+                        toast("Phones paired before are disconnected.");
+                        showRemote();
+                    }
+                })
+                .setNegativeButton("Turn off", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        prefs.put("remote_on", "0");
+                        srv.stop();
+                        toast("TokTV Remote is off");
+                    }
+                })
+                .show();
+        srv.onPaired = new Runnable() {
+            @Override
+            public void run() {
+                srv.onPaired = null;
+                if (dlg.isShowing()) dlg.dismiss();
+                Toast.makeText(getApplicationContext(), "📱 Phone paired with TokTV Remote", Toast.LENGTH_LONG).show();
+            }
+        };
+    }
+
+    private static android.graphics.Bitmap qrBitmap(String text, int size) {
+        try {
+            com.google.zxing.common.BitMatrix m = new com.google.zxing.qrcode.QRCodeWriter()
+                    .encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size);
+            android.graphics.Bitmap b = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.RGB_565);
+            int[] row = new int[size];
+            for (int y = 0; y < size; y++) {
+                for (int x = 0; x < size; x++) row[x] = m.get(x, y) ? Color.BLACK : Color.WHITE;
+                b.setPixels(row, 0, size, 0, y, size, 1);
+            }
+            return b;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // ---------------------------------------------------------------- Helpers

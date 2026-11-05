@@ -29,7 +29,7 @@ foreach ($line in Get-Content libs.txt) {
 if (Test-Path build) { Remove-Item -Recurse -Force build }
 New-Item -ItemType Directory build\gen, build\classes | Out-Null
 Run aapt2 compile --dir res -o build\res.zip
-Run aapt2 link -o build\unsigned.apk -I $jar --manifest AndroidManifest.xml -A assets --java build\gen --min-sdk-version 22 --target-sdk-version 30 --version-code 7 --version-name 2.4 build\res.zip
+Run aapt2 link -o build\unsigned.apk -I $jar --manifest AndroidManifest.xml -A assets --java build\gen --min-sdk-version 22 --target-sdk-version 30 --version-code 8 --version-name 2.5 build\res.zip
 Get-ChildItem src, build\gen -Recurse -Filter *.java | ForEach-Object FullName | Set-Content build\sources.txt
 Run javac -nowarn -encoding UTF-8 -source 8 -target 8 -bootclasspath $jar -classpath "$jar;libs\jars\*" -d build\classes "@build\sources.txt"
 $jars = Get-ChildItem libs\jars -Filter *.jar | ForEach-Object FullName

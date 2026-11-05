@@ -11,3 +11,4 @@ https://dl.google.com/dl/android/maven2/com/google/android/exoplayer/exoplayer-d
 https://dl.google.com/dl/android/maven2/androidx/annotation/annotation/1.3.0/annotation-1.3.0.jar 021f49f5f9b85fc49de712539f79123119740595
 https://repo1.maven.org/maven2/com/google/guava/guava/31.1-android/guava-31.1-android.jar 9222c47cc3ae890f07f7c961bbb3cb69050fe4aa
 https://repo1.maven.org/maven2/com/google/guava/failureaccess/1.0.1/failureaccess-1.0.1.jar 1dcf1de382a0bf95a3d8b0849546c88bac1292c9
+https://repo1.maven.org/maven2/com/google/zxing/core/3.5.3/core-3.5.3.jar ca1349214a356cd7958651b2d5a0e1f3811a9c4b

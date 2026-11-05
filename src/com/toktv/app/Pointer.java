@@ -59,7 +59,15 @@ public class Pointer extends View {
 
     public boolean isOn() { return on; }
 
+    private static java.lang.ref.WeakReference<Pointer> current;
+
+    /** The pointer of the screen in front (for TokTV Remote's free-mouse button). */
+    public static Pointer current() {
+        return current == null ? null : current.get();
+    }
+
     public void setOn(boolean v) {
+        current = new java.lang.ref.WeakReference<>(this);
         on = v;
         if (on && x < 0) {
             x = target.getWidth() / 2f;
