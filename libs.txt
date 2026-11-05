@@ -1,0 +1,14 @@
+# Libraries bundled into the APK (ExoPlayer plays TikTok's FLV LIVE streams).
+# build.sh / build.ps1 download these into libs/ and check the SHA-1 before using them.
+# url sha1
+https://dl.google.com/dl/android/maven2/com/google/android/exoplayer/exoplayer-core/2.19.1/exoplayer-core-2.19.1.aar 00cd567e1da367fe15cb10001306f40a4f7322e1
+https://dl.google.com/dl/android/maven2/com/google/android/exoplayer/exoplayer-common/2.19.1/exoplayer-common-2.19.1.aar c561f08f9ee2229cb822ced717edd72e3aa8c518
+https://dl.google.com/dl/android/maven2/com/google/android/exoplayer/exoplayer-container/2.19.1/exoplayer-container-2.19.1.aar 7d72f052e16d3e0caaa4bff570e86ade22c0e4ac
+https://dl.google.com/dl/android/maven2/com/google/android/exoplayer/exoplayer-extractor/2.19.1/exoplayer-extractor-2.19.1.aar 7188b1fd1f1f3e4ffe01d758b50779db3ef244fe
+https://dl.google.com/dl/android/maven2/com/google/android/exoplayer/exoplayer-datasource/2.19.1/exoplayer-datasource-2.19.1.aar bcc6564c34ceb4c9b72067dd60fced34e04159a6
+https://dl.google.com/dl/android/maven2/com/google/android/exoplayer/exoplayer-decoder/2.19.1/exoplayer-decoder-2.19.1.aar c36347bb029fe9f15d8b21087e203a3e8a0227c2
+https://dl.google.com/dl/android/maven2/com/google/android/exoplayer/exoplayer-database/2.19.1/exoplayer-database-2.19.1.aar 218bbec6e5eda7668d6eba892b92b82670f24ac7
+https://dl.google.com/dl/android/maven2/androidx/annotation/annotation/1.3.0/annotation-1.3.0.jar 021f49f5f9b85fc49de712539f79123119740595
+https://repo1.maven.org/maven2/com/google/guava/guava/31.1-android/guava-31.1-android.jar 9222c47cc3ae890f07f7c961bbb3cb69050fe4aa
+https://repo1.maven.org/maven2/com/google/guava/failureaccess/1.0.1/failureaccess-1.0.1.jar 1dcf1de382a0bf95a3d8b0849546c88bac1292c9
+https://repo1.maven.org/maven2/com/google/zxing/core/3.5.3/core-3.5.3.jar ca1349214a356cd7958651b2d5a0e1f3811a9c4b

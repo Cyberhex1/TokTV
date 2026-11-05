@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b1430"/>
+      <stop offset="1" stop-color="#0b0b12"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.45" r="0.55">
+      <stop offset="0" stop-color="#fe2c55" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#fe2c55" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="220" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="220" fill="url(#glow)"/>
+  <!-- TV body: cyan + pink offset outlines then white -->
+  <g fill="none" stroke-width="44" stroke-linejoin="round">
+    <rect x="178" y="250" width="668" height="440" rx="70" stroke="#25f4ee" transform="translate(-12,-10)"/>
+    <rect x="178" y="250" width="668" height="440" rx="70" stroke="#fe2c55" transform="translate(12,10)"/>
+    <rect x="178" y="250" width="668" height="440" rx="70" stroke="#ffffff"/>
+  </g>
+  <!-- antenna -->
+  <g stroke-linecap="round" stroke-width="36" fill="none">
+    <path d="M512 228 L410 130" stroke="#ffffff"/>
+    <path d="M512 228 L614 130" stroke="#ffffff"/>
+  </g>
+  <circle cx="512" cy="228" r="26" fill="#ffffff"/>
+  <!-- stand -->
+  <rect x="352" y="760" width="320" height="44" rx="22" fill="#ffffff"/>
+  <!-- LIVE pill -->
+  <rect x="300" y="390" width="424" height="160" rx="80" fill="#fe2c55"/>
+  <circle cx="380" cy="470" r="28" fill="#ffffff"/>
+  <text x="560" y="470" font-family="DejaVu Sans, Arial, sans-serif" font-weight="bold" font-size="104" fill="#ffffff" text-anchor="middle" dominant-baseline="central" letter-spacing="4">LIVE</text>
+</svg>

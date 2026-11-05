@@ -1,6 +1,8 @@
 package com.toktv.app;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -25,6 +27,17 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.VideoView;
+import android.view.SurfaceView;
+import com.google.android.exoplayer2.DefaultLoadControl;
+import com.google.android.exoplayer2.ExoPlayer;
+import com.google.android.exoplayer2.MediaItem;
+import com.google.android.exoplayer2.PlaybackException;
+import com.google.android.exoplayer2.Player;
+import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory;
+import com.google.android.exoplayer2.source.MediaSource;
+import com.google.android.exoplayer2.source.ProgressiveMediaSource;
+import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
+import com.google.android.exoplayer2.video.VideoSize;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -45,7 +58,12 @@ import java.util.Map;
  * Up/Down switches between Lives, Right shows chat, Back returns to the app.
  */
 public class LiveActivity extends Activity {
-    private static final String[] QUALITY_ORDER = {"origin", "uhd", "hd", "sd", "ld"};
+    /** "Auto": 720p first — smooth on Fire TV sticks — then the rest. */
+    private static final String[] QUALITY_ORDER = {"hd", "hd_60", "sd", "uhd", "uhd_60", "origin", "ld"};
+    private ExoPlayer exo;
+    private SurfaceView surface;
+    private FrameLayout videoBox;
+    private int videoW, videoH;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private Prefs prefs;
@@ -54,8 +72,12 @@ public class LiveActivity extends Activity {
     private LinearLayout info;
     private TextView infoName, infoTitle, infoViewers, status, hint;
     private ProgressBar spinner;
-    private WebView chat;
-    private boolean chatOpen;
+    /** The LIVE on screen, for TokTV Remote. */
+    static volatile LiveActivity current;
+    String curNick, curTitle;
+    long curViewers;
+    private ChatPanel chatPanel;
+    private SpeakerOverlay speakers;
 
     private final List<String> lives = new ArrayList<>();
     private int index;
@@ -65,6 +87,15 @@ public class LiveActivity extends Activity {
     private List<String> streamUrls = new ArrayList<>();
     private int streamAttempt;
     private boolean failed;
+    private Pointer pointer;
+    /** This load already re-checked the room with a fresh lookup (no cache). */
+    private boolean rechecked;
+    /** Moving on by itself after a LIVE ended: skip offline rooms quietly. */
+    private boolean autoNext;
+    private int autoTries;
+    private String endedFrom;
+    private final java.util.Set<String> offline = new java.util.HashSet<>();
+    private static final long STALL_MS = 15000;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -105,16 +136,29 @@ public class LiveActivity extends Activity {
         root.setBackgroundColor(Color.BLACK);
         setContentView(root);
 
+        videoBox = new FrameLayout(this);
+        root.addView(videoBox, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         video = new VideoView(this);
-        root.addView(video, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        videoBox.addView(video, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        surface = new SurfaceView(this);
+        videoBox.addView(surface, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        videoBox.setBackgroundColor(Color.BLACK);   // also covers the hidden chat page underneath
+        speakers = new SpeakerOverlay(this);
+        speakers.setEnabledHighlight(!"0".equals(prefs.get("talk_highlight", "1")));
+        videoBox.addView(speakers, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        videoBox.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+                if (r - l != or - ol || b - t != ob - ot) fitSurface();
+            }
+        });
         video.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
             @Override
             public void onPrepared(MediaPlayer mp) {
-                spinner.setVisibility(View.GONE);
-                status.setVisibility(View.GONE);
                 mp.setLooping(false);
                 video.start();
-                showInfo();
+                rechecked = false;
+                onPlaying();
             }
         });
         video.setOnErrorListener(new MediaPlayer.OnErrorListener() {
@@ -127,16 +171,21 @@ public class LiveActivity extends Activity {
         video.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
             @Override
             public void onCompletion(MediaPlayer mp) {
-                // A Live "completes" when it ends or the connection drops. Reload once to check.
-                load(user);
+                // A Live "completes" when it ends or the connection drops. Check the room again.
+                recheck();
             }
         });
         video.setOnInfoListener(new MediaPlayer.OnInfoListener() {
             @Override
             public boolean onInfo(MediaPlayer mp, int what, int extra) {
-                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) spinner.setVisibility(View.VISIBLE);
-                else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END || what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START)
+                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                    spinner.setVisibility(View.VISIBLE);
+                    ui.removeCallbacks(stallCheck);
+                    ui.postDelayed(stallCheck, STALL_MS);
+                } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END || what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
                     spinner.setVisibility(View.GONE);
+                    ui.removeCallbacks(stallCheck);
+                }
                 return false;
             }
         });
@@ -169,8 +218,8 @@ public class LiveActivity extends Activity {
         infoViewers = text(15, Color.parseColor("#25F4EE"), false);
         infoViewers.setPadding(0, dp(4), 0, 0);
         info.addView(infoViewers);
-        FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(dp(520), -2, Gravity.TOP | Gravity.START);
-        ilp.setMargins(dp(32), dp(28), 0, 0);
+        FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(dp(520), -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        ilp.setMargins(0, dp(24), 0, 0);
         root.addView(info, ilp);
 
         spinner = new ProgressBar(this);
@@ -187,10 +236,22 @@ public class LiveActivity extends Activity {
         hint = text(15, Color.WHITE, false);
         hint.setBackgroundResource(R.drawable.card_bg);
         hint.setPadding(dp(18), dp(8), dp(18), dp(8));
-        hint.setText("▲ ▼  Switch LIVE      " + (prefs.nativeChat() ? "▶  Chat      " : "") + "OK  Info      ≡  Quality      Back  Exit");
+        hint.setText("▲ ▼  Switch LIVE      ◀ ▶  Chat      OK  Info      ≡  Options      Back  LIVE list");
         FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         hlp.bottomMargin = dp(24);
         root.addView(hint, hlp);
+
+        chatPanel = new ChatPanel(this, root, prefs);
+        if (prefs.nativeChat() && !"0".equals(prefs.get("chat_open", "1"))) chatPanel.open(user);
+        info.bringToFront();
+        hint.bringToFront();
+
+        pointer = new Pointer(this, root);
+        root.addView(pointer, new FrameLayout.LayoutParams(-1, -1));
+        pointer.post(new Runnable() {
+            @Override
+            public void run() { pointer.setOn("1".equals(prefs.get("mouse", "0"))); }
+        });
     }
 
     private TextView text(float size, int color, boolean bold) {
@@ -225,23 +286,36 @@ public class LiveActivity extends Activity {
     // ---------------------------------------------------------------- Loading
 
     private void load(final String u) {
+        load(u, false);
+    }
+
+    /** User-started load: stops any automatic moving-on. */
+    private void loadManual(String u) {
+        autoNext = false;
+        load(u, false);
+    }
+
+    private void load(final String u, final boolean fresh) {
         user = u;
         failed = false;
+        rechecked = fresh;
         final int token = ++loadToken;
-        video.stopPlayback();
+        stopPlayback();
+        ui.removeCallbacks(stallCheck);
         infoName.setText("@" + u);
         infoTitle.setText("");
         infoViewers.setText("");
         showInfo();
-        setStatus("Opening @" + u + "'s LIVE…", true);
-        if (chatOpen) loadChat();
+        setStatus(autoNext ? "LIVE ended. Opening @" + u + "…" : "Opening @" + u + "'s LIVE…", true);
+        if (chatPanel != null) chatPanel.switchTo(u);
+        if (speakers != null) speakers.clear();
 
-        final String page = pageStream;
+        final String page = fresh ? null : pageStream;
         pageStream = null;   // only valid for the first Live we were opened with
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final Result r = resolve(u, page);
+                final Result r = resolve(u, page, fresh);
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
@@ -253,11 +327,138 @@ public class LiveActivity extends Activity {
         }).start();
     }
 
+    String user() { return user; }
+
+    ChatPanel chat() { return chatPanel; }
+
+    void remoteToggleChat() { toggleChat(); }
+
+    void remoteSwitch(int dir) { switchLive(dir); }
+
+    void remoteQuality() { cycleQuality(); }
+
+    void remoteWatch(String u) {
+        if (!containsIgnoreCase(lives, u)) lives.add(index + 1, u);
+        for (int i = 0; i < lives.size(); i++) if (lives.get(i).equalsIgnoreCase(u)) index = i;
+        loadManual(u);
+    }
+
+    // ---------------------------------------------------------------- LIVE ended
+
+    /**
+     * The stream ended, stalled or failed: look the room up again without any cached data.
+     * Ended → move on to the next LIVE; still live → try its fresh stream URLs once.
+     */
+    private void recheck() {
+        if (rechecked) {
+            showFailure();
+            return;
+        }
+        final String u = user;
+        final int token = ++loadToken;
+        rechecked = true;
+        stopPlayback();
+        ui.removeCallbacks(stallCheck);
+        setStatus(null, true);
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final Result r = resolve(u, null, true);
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (token != loadToken || isFinishing()) return;
+                        if (!r.live) {
+                            onLiveEnded();
+                        } else if (!r.hls.isEmpty()) {
+                            streamUrls = r.hls;
+                            streamAttempt = 0;
+                            play(streamUrls.get(0));
+                        } else {
+                            showFailure();
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void onLiveEnded() {
+        offline.add(user.toLowerCase());
+        if (!autoNext) {
+            autoNext = true;
+            autoTries = 0;
+            endedFrom = user;
+            toast("@" + user + "'s LIVE ended");
+        }
+        playNextLive();
+    }
+
+    /** Next LIVE in the list the user opened this from, skipping rooms already found offline. */
+    private void playNextLive() {
+        for (int step = 1; step < lives.size() && autoTries < lives.size(); step++) {
+            int i = (index + step) % lives.size();
+            String u = lives.get(i);
+            if (offline.contains(u.toLowerCase())) continue;
+            autoTries++;
+            index = i;
+            load(u, false);
+            return;
+        }
+        autoNext = false;
+        failed = false;
+        stopPlayback();
+        setStatus("@" + (endedFrom != null ? endedFrom : user) + "'s LIVE ended.\nNo other LIVEs in this list are on right now. Back to exit.", false);
+    }
+
+    private final Runnable stallCheck = new Runnable() {
+        @Override
+        public void run() { recheck(); }
+    };
+
+    private void showFailure() {
+        autoNext = false;
+        failed = true;
+        stopPlayback();
+        ui.removeCallbacks(stallCheck);
+        setStatus("Couldn't play this LIVE in the Fire TV player.\nPress OK to watch it in the website player.", false);
+    }
+
+    private void onPlaying() {
+        new Picks(prefs).markWatched(user);
+        ui.removeCallbacks(stallCheck);
+        autoNext = false;
+        autoTries = 0;
+        offline.remove(user.toLowerCase());
+        spinner.setVisibility(View.GONE);
+        status.setVisibility(View.GONE);
+        showInfo();
+    }
+
+    /** HTTP 404/410 from the stream server: the stream is gone, no point trying other qualities. */
+    private static boolean isGone(Throwable t) {
+        for (int d = 0; t != null && d < 8; d++, t = t.getCause()) {
+            if (t instanceof com.google.android.exoplayer2.upstream.HttpDataSource.InvalidResponseCodeException) {
+                int c = ((com.google.android.exoplayer2.upstream.HttpDataSource.InvalidResponseCodeException) t).responseCode;
+                return c == 404 || c == 410;
+            }
+        }
+        return false;
+    }
+
     private void onResolved(Result r) {
+        curNick = r.nickname;
+        curTitle = r.title;
+        curViewers = r.viewers;
         if (r.nickname != null) infoName.setText(r.nickname + "  @" + user);
         if (r.title != null) infoTitle.setText(r.title);
         if (r.viewers > 0) infoViewers.setText(formatCount(r.viewers) + " watching");
         if (!r.live) {
+            if (autoNext) {   // moving on after a LIVE ended: skip rooms that are offline
+                onLiveEnded();
+                return;
+            }
+            offline.add(user.toLowerCase());
             failed = true;
             setStatus("@" + user + " isn't LIVE right now.\n▲ ▼ to try another LIVE, Back to exit.", false);
             return;
@@ -274,11 +475,126 @@ public class LiveActivity extends Activity {
 
     private void play(String url) {
         setStatus(null, true);
+        stopPlayback();
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", Prefs.DESKTOP_UA);
         headers.put("Referer", "https://www.tiktok.com/");
+        if (url.split("\\?")[0].endsWith(".flv")) {
+            playFlv(url, headers);
+            return;
+        }
+        surface.setVisibility(View.GONE);
+        video.setVisibility(View.VISIBLE);
         video.setVideoURI(Uri.parse(url), headers);
         video.requestFocus();
+    }
+
+    /** TikTok's web LIVE streams are FLV, which the system player can't open: ExoPlayer plays them. */
+    private void playFlv(String url, Map<String, String> headers) {
+        video.setVisibility(View.GONE);
+        surface.setVisibility(View.VISIBLE);
+        if (exo == null) {
+            DefaultLoadControl lc = new DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(3000, 20000, 1000, 2000)
+                    .build();
+            exo = new ExoPlayer.Builder(this).setLoadControl(lc).build();
+            exo.setVideoSurfaceView(surface);
+            exo.addListener(new Player.Listener() {
+                @Override
+                public void onPlaybackStateChanged(int state) {
+                    if (state == Player.STATE_READY) {
+                        rechecked = false;
+                        onPlaying();
+                    } else if (state == Player.STATE_BUFFERING) {
+                        spinner.setVisibility(View.VISIBLE);
+                        ui.removeCallbacks(stallCheck);
+                        ui.postDelayed(stallCheck, STALL_MS);
+                    } else if (state == Player.STATE_ENDED) {
+                        recheck();   // end of stream: ended, or just dropped?
+                    }
+                }
+
+                @Override
+                public void onPlayerError(PlaybackException error) {
+                    if (isGone(error)) recheck();
+                    else tryNextStream();
+                }
+
+                @Override
+                public void onVideoSizeChanged(VideoSize size) {
+                    videoW = Math.round(size.width * size.pixelWidthHeightRatio);
+                    videoH = size.height;
+                    fitSurface();
+                }
+            });
+        }
+        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                .setUserAgent(Prefs.DESKTOP_UA)
+                .setDefaultRequestProperties(headers)
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(10000)
+                .setReadTimeoutMs(15000);
+        seiQueue.clear();
+        speakers.clear();
+        com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.seiListener = seiListener;
+        ui.removeCallbacks(seiTick);
+        ui.post(seiTick);
+        MediaSource src = new ProgressiveMediaSource.Factory(http, com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.FACTORY)
+                .createMediaSource(MediaItem.fromUri(url));
+        exo.setMediaSource(src);
+        exo.prepare();
+        exo.setPlayWhenReady(true);
+    }
+
+    /** Keeps the video's shape (most LIVEs are portrait) inside the video area. */
+    private void fitSurface() {
+        if (videoW <= 0 || videoH <= 0) return;
+        int bw = videoBox.getWidth(), bh = videoBox.getHeight();
+        if (bw <= 0 || bh <= 0) return;
+        float s = Math.min(bw / (float) videoW, bh / (float) videoH);
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) surface.getLayoutParams();
+        lp.width = Math.round(videoW * s);
+        lp.height = Math.round(videoH * s);
+        lp.gravity = Gravity.CENTER;
+        surface.setLayoutParams(lp);
+        FrameLayout.LayoutParams olp = (FrameLayout.LayoutParams) speakers.getLayoutParams();
+        olp.width = lp.width;
+        olp.height = lp.height;
+        olp.gravity = Gravity.CENTER;
+        speakers.setLayoutParams(olp);
+    }
+
+    // ---------------------------------------------------------------- Who's talking (from the stream)
+
+    private final java.util.concurrent.ConcurrentLinkedQueue<Object[]> seiQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    private final com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.SeiListener seiListener =
+            new com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.SeiListener() {
+                @Override
+                public void onSei(long timeUs, String json) {
+                    if (seiQueue.size() < 200) seiQueue.add(new Object[]{timeUs, json});
+                }
+            };
+
+    /** Applies each SEI message when its frame is on screen (the loader runs a few seconds ahead). */
+    private final Runnable seiTick = new Runnable() {
+        @Override
+        public void run() {
+            if (exo != null) {
+                long pos = exo.getCurrentPosition() * 1000L + 100000L;
+                Object[] head;
+                while ((head = seiQueue.peek()) != null && (Long) head[0] <= pos) {
+                    seiQueue.poll();
+                    speakers.apply((String) head[1]);
+                }
+            }
+            ui.postDelayed(this, 100);
+        }
+    };
+
+    private void stopPlayback() {
+        video.stopPlayback();
+        if (exo != null) exo.stop();
     }
 
     private void tryNextStream() {
@@ -287,9 +603,7 @@ public class LiveActivity extends Activity {
             play(streamUrls.get(streamAttempt));
             return;
         }
-        failed = true;
-        video.stopPlayback();
-        setStatus("Couldn't play this LIVE in the Fire TV player.\nPress OK to watch it in the website player.", false);
+        recheck();   // all URLs failed: has the LIVE ended? (shows the error if it's still on)
     }
 
     private static String formatCount(long n) {
@@ -302,13 +616,27 @@ public class LiveActivity extends Activity {
 
     static class Result {
         boolean live;
+        /** TikTok said the room is over (status other than 2 = live). */
+        boolean ended;
         String nickname, title;
         long viewers;
         List<String> hls = new ArrayList<>();
     }
 
-    private Result resolve(String u, String pageJson) {
+    /** fresh: skip the home screen's cached room data and ask TikTok now (used after a stream ends). */
+    private Result resolve(String u, String pageJson, boolean fresh) {
         Result r = new Result();
+        // 0) Stream data from the LIVE list the home screen already loaded.
+        Feed.Room fr = fresh || offline.contains(u.toLowerCase()) ? null : Feed.find(u);
+        if (fr != null && System.currentTimeMillis() - fr.at < 10 * 60 * 1000) {
+            r.nickname = fr.nick;
+            r.title = emptyToNull(fr.title);
+            r.viewers = fr.viewers;
+            r.live = true;
+            addFromStreamData(fr.streamData, r);
+            addUrl(r, fr.hls);
+            if (!r.hls.isEmpty()) return r;
+        }
         // 1) Data embedded in the page the user was on.
         if (pageJson != null && pageJson.length() > 0) {
             try { parseUserRoom(new JSONObject(pageJson), r); } catch (Exception ignored) { }
@@ -339,6 +667,7 @@ public class LiveActivity extends Activity {
                 if (data != null) {
                     int st = data.optInt("status", 0);
                     if (st == 2) r.live = true;
+                    else if (st == 4) r.ended = true;   // 4 = finished (3 = host paused, keep waiting)
                     if (r.title == null) r.title = emptyToNull(data.optString("title"));
                     if (r.viewers == 0) r.viewers = data.optLong("user_count", 0);
                     JSONObject owner = data.optJSONObject("owner");
@@ -358,7 +687,10 @@ public class LiveActivity extends Activity {
             } catch (Exception ignored) {
             }
         }
-        if (!r.hls.isEmpty()) r.live = true;
+        if (r.ended) {   // leftover stream URLs of an ended room just 404
+            r.live = false;
+            r.hls.clear();
+        } else if (!r.hls.isEmpty()) r.live = true;
         return r;
     }
 
@@ -372,7 +704,9 @@ public class LiveActivity extends Activity {
         JSONObject room = o.optJSONObject("liveRoom");
         if (room == null) return;
         r.title = emptyToNull(room.optString("title"));
-        if (room.optInt("status", 0) == 2) r.live = true;
+        int st = room.optInt("status", 0);
+        if (st == 2) r.live = true;
+        else if (st == 4) r.ended = true;   // 4 = finished (3 = host paused, keep waiting)
         JSONObject stats = room.optJSONObject("liveRoomStats");
         if (stats != null) r.viewers = stats.optLong("userCount", 0);
         JSONObject sd = room.optJSONObject("streamData");
@@ -390,7 +724,10 @@ public class LiveActivity extends Activity {
                 JSONObject level = data.optJSONObject(q);
                 if (level == null) continue;
                 JSONObject main = level.optJSONObject("main");
-                if (main != null) addUrl(r, main.optString("hls"));
+                if (main != null) {
+                    addUrl(r, main.optString("flv"));
+                    addUrl(r, main.optString("hls"));
+                }
             }
         } catch (Exception ignored) {
         }
@@ -399,7 +736,10 @@ public class LiveActivity extends Activity {
     private List<String> qualityOrder() {
         List<String> order = new ArrayList<>();
         String q = prefs.quality();
-        if (!"auto".equals(q)) order.add(q);
+        if (!"auto".equals(q)) {
+            order.add(q);
+            order.add(q + "_60");
+        }
         for (String s : QUALITY_ORDER) if (!order.contains(s)) order.add(s);
         return order;
     }
@@ -435,71 +775,24 @@ public class LiveActivity extends Activity {
 
     // ---------------------------------------------------------------- Chat panel
 
+    /** Read-only native chat beside the video (sending is done from TokTV Remote). */
     private void toggleChat() {
-        if (!prefs.nativeChat()) {
-            toast("Chat is turned off in Settings");
-            return;
-        }
-        chatOpen = !chatOpen;
-        int w = (int) (getResources().getDisplayMetrics().widthPixels * 0.32f);
-        FrameLayout.LayoutParams vlp = (FrameLayout.LayoutParams) video.getLayoutParams();
-        if (chatOpen) {
-            if (chat == null) {
-                chat = new WebView(this);
-                WebSettings s = chat.getSettings();
-                s.setJavaScriptEnabled(true);
-                s.setDomStorageEnabled(true);
-                s.setUserAgentString(Prefs.DESKTOP_UA);
-                s.setMediaPlaybackRequiresUserGesture(true);
-                s.setUseWideViewPort(true);
-                s.setLoadWithOverviewMode(true);
-                chat.setBackgroundColor(Color.BLACK);
-                chat.setFocusable(false);
-                CookieManager.getInstance().setAcceptThirdPartyCookies(chat, true);
-                chat.setWebViewClient(new WebViewClient() {
-                    @Override
-                    public void onPageFinished(WebView view, String url) {
-                        view.evaluateJavascript(CHAT_JS, null);
-                    }
-                });
-                root.addView(chat, new FrameLayout.LayoutParams(w, -1, Gravity.END));
-            }
-            chat.setVisibility(View.VISIBLE);
-            loadChat();
-            vlp.rightMargin = w;
-            vlp.gravity = Gravity.CENTER_VERTICAL | Gravity.START;
+        if (chatPanel.isOpen()) {
+            chatPanel.close();
+            prefs.put("chat_open", "0");
         } else {
-            if (chat != null) {
-                chat.setVisibility(View.GONE);
-                chat.loadUrl("about:blank");
-            }
-            vlp.rightMargin = 0;
-            vlp.gravity = Gravity.CENTER;
+            chatPanel.open(user);
+            prefs.put("chat_open", "1");
         }
-        video.setLayoutParams(vlp);
         info.bringToFront();
         hint.bringToFront();
+        pointer.bringToFront();
     }
-
-    private void loadChat() {
-        if (chat != null) chat.loadUrl("https://www.tiktok.com/@" + user + "/live");
-    }
-
-    /** Keeps the chat page silent: hides and pauses its video so only chat and comments show. */
-    private static final String CHAT_JS =
-            "(function(){var st=document.createElement('style');"
-            + "st.textContent='video{display:none!important}html,body{cursor:none!important}';"
-            + "document.head.appendChild(st);"
-            + "setInterval(function(){var v=document.querySelectorAll('video');"
-            + "for(var i=0;i<v.length;i++){v[i].muted=true;v[i].pause();}"
-            + "var c=document.querySelector('[data-e2e=\"chat-room\"],[class*=\"DivChatRoomContainer\"],[class*=\"ChatRoom\"]');"
-            + "if(c&&!c.__tv){c.__tv=1;c.scrollIntoView();}"
-            + "},1000);})();";
-
     // ---------------------------------------------------------------- Keys
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
+        if (pointer != null && pointer.handleKey(e)) return true;
         if (e.getAction() != KeyEvent.ACTION_DOWN) {
             return e.getKeyCode() == KeyEvent.KEYCODE_BACK || super.dispatchKeyEvent(e);
         }
@@ -515,10 +808,9 @@ public class LiveActivity extends Activity {
                 if (e.getRepeatCount() == 0) switchLive(1);
                 return true;
             case KeyEvent.KEYCODE_DPAD_RIGHT:
-                if (!chatOpen) toggleChat(); else showInfo();
-                return true;
             case KeyEvent.KEYCODE_DPAD_LEFT:
-                if (chatOpen) toggleChat(); else showInfo();
+                // ◀ or ▶ shows/hides chat.
+                if (e.getRepeatCount() == 0) toggleChat();
                 return true;
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
@@ -527,11 +819,10 @@ public class LiveActivity extends Activity {
                 else showInfo();
                 return true;
             case KeyEvent.KEYCODE_MENU:
-                cycleQuality();
+                if (e.getRepeatCount() == 0) showOptions();
                 return true;
             case KeyEvent.KEYCODE_BACK:
-                if (chatOpen) toggleChat();
-                else finish();
+                finish();
                 return true;
         }
         return super.dispatchKeyEvent(e);
@@ -543,7 +834,7 @@ public class LiveActivity extends Activity {
             return;
         }
         index = (index + dir + lives.size()) % lives.size();
-        load(lives.get(index));
+        loadManual(lives.get(index));
     }
 
     private void cycleQuality() {
@@ -554,14 +845,55 @@ public class LiveActivity extends Activity {
         String[] next = opts[(i + 1) % opts.length];
         prefs.put("quality", next[0]);
         toast("Quality: " + next[1]);
-        load(user);
+        loadManual(user);
     }
 
     private void fallbackToWeb() {
-        Intent data = new Intent();
-        data.putExtra("fallbackUser", user);
-        setResult(RESULT_OK, data);
+        if (getCallingActivity() != null) {
+            // Opened from the website screen: let it switch to the website player.
+            Intent data = new Intent();
+            data.putExtra("fallbackUser", user);
+            setResult(RESULT_OK, data);
+            finish();
+            return;
+        }
+        Intent i = new Intent(this, MainActivity.class);
+        i.setData(Uri.parse("https://www.tiktok.com/@" + user + "/live"));
+        i.putExtra("webOnly", user);
+        startActivity(i);
         finish();
+    }
+
+    private void showOptions() {
+        final Picks picks = new Picks(prefs);
+        final String[] items = {
+                "Quality: " + Prefs.labelFor(Prefs.QUALITY_OPTIONS, prefs.quality()),
+                picks.isPinned(user) ? "Unpin @" + user : "Pin @" + user + " to top",
+                "Free mouse: " + (pointer.isOn() ? "On" : "Off"),
+                chatPanel.isOpen() ? "Hide chat" : "Show chat",
+                "Watch in website player (gifts, full page)",
+                "Back to LIVE list",
+        };
+        new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                .setTitle("@" + user)
+                .setItems(items, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        switch (which) {
+                            case 0: cycleQuality(); break;
+                            case 1: toast(picks.togglePin(user) ? "Pinned @" + user : "Unpinned @" + user); break;
+                            case 2:
+                                pointer.toggle();
+                                prefs.put("mouse", pointer.isOn() ? "1" : "0");
+                                toast(pointer.isOn() ? "Free mouse on: arrows move, OK clicks, ⏪ ⏩ switch LIVE" : "Free mouse off");
+                                break;
+                            case 3: toggleChat(); break;
+                            case 4: fallbackToWeb(); break;
+                            case 5: finish(); break;
+                        }
+                    }
+                })
+                .show();
     }
 
     private void toast(String s) {
@@ -573,13 +905,17 @@ public class LiveActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        if (current == this) current = null;
         paused = true;
-        video.stopPlayback();
+        ui.removeCallbacks(stallCheck);
+        stopPlayback();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        current = this;
+        Tv.top = this;
         // A paused Live is stale; reconnect to the live edge.
         if (paused) {
             paused = false;
@@ -590,11 +926,14 @@ public class LiveActivity extends Activity {
     @Override
     protected void onDestroy() {
         loadToken++;
-        video.stopPlayback();
-        if (chat != null) {
-            root.removeView(chat);
-            chat.destroy();
+        stopPlayback();
+        if (exo != null) {
+            exo.release();
+            exo = null;
         }
+        com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.seiListener = null;
+        ui.removeCallbacksAndMessages(null);
+        if (chatPanel != null) chatPanel.close();
         super.onDestroy();
     }
 }

@@ -58,7 +58,7 @@ public final class Prefs {
         sp.edit().putString(key, value).apply();
     }
 
-    public String livePlayer() { return get("live_player", PLAYER_WEB); }
+    public String livePlayer() { return get("live_player", PLAYER_NATIVE); }
     public boolean nativeLive() { return PLAYER_NATIVE.equals(livePlayer()); }
     public String quality() { return get("quality", "auto"); }
     public int uiScale() {
