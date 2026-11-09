@@ -2,3 +2,5 @@ build/
 *.apk
 *.idsig
 keystore/
+libs/
+*.sha256

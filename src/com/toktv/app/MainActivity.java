@@ -68,6 +68,7 @@ public class MainActivity extends Activity {
     private String webOnlyUser;
     private WebChromeClient.CustomViewCallback fullscreenCallback;
     private View fullscreenView;
+    private Pointer pointer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,7 +87,14 @@ public class MainActivity extends Activity {
 
         buildMenu();
         buildHint();
+        pointer = new Pointer(this, root);
+        root.addView(pointer, new FrameLayout.LayoutParams(-1, -1));
+        pointer.post(new Runnable() {
+            @Override
+            public void run() { pointer.setOn("1".equals(prefs.get("mouse", "0"))); }
+        });
 
+        if (getIntent() != null) webOnlyUser = getIntent().getStringExtra("webOnly");
         Uri data = getIntent() != null ? getIntent().getData() : null;
         if (savedInstanceState != null) {
             web.restoreState(savedInstanceState);
@@ -274,7 +282,7 @@ public class MainActivity extends Activity {
     }
 
     /** Trackers, analytics and ad hosts: blocking them saves a lot of CPU on slow sticks. */
-    private static boolean isBlocked(String host) {
+    static boolean isBlocked(String host) {
         if (host == null) return false;
         host = host.toLowerCase();
         if (host.endsWith("tiktokv.com") || host.endsWith("byteoversea.com") || host.endsWith("tiktokv.us")
@@ -416,6 +424,8 @@ public class MainActivity extends Activity {
             return super.dispatchKeyEvent(e);
         }
 
+        if (pointer.handleKey(e)) return true;
+
         String k = null;
         switch (code) {
             case KeyEvent.KEYCODE_DPAD_UP: k = "up"; break;
@@ -457,13 +467,7 @@ public class MainActivity extends Activity {
                     web.goBack();
                     return;
                 }
-                long now = System.currentTimeMillis();
-                if (now - lastBackAt < 2500) {
-                    finish();
-                } else {
-                    lastBackAt = now;
-                    toast("Press Back again to exit");
-                }
+                finish();   // back to the LIVE list
             }
         });
     }
@@ -492,7 +496,15 @@ public class MainActivity extends Activity {
         title.setPadding(dp(16), 0, 0, dp(18));
         menuList.addView(title);
 
-        addMenuItem("For You", new Runnable() { public void run() { go("https://www.tiktok.com/foryou"); } });
+        addMenuItem("◀ LIVE list", new Runnable() { public void run() { finish(); } });
+        addMenuItem("Free mouse on/off", new Runnable() {
+            public void run() {
+                pointer.toggle();
+                prefs.put("mouse", pointer.isOn() ? "1" : "0");
+                toast(pointer.isOn() ? "Free mouse on: arrows move, OK clicks, push past the edge to scroll" : "Free mouse off");
+            }
+        });
+        addMenuItem("For You",new Runnable() { public void run() { go("https://www.tiktok.com/foryou"); } });
         addMenuItem("Following", new Runnable() { public void run() { go("https://www.tiktok.com/following"); } });
         addMenuItem("LIVE", new Runnable() { public void run() { go("https://www.tiktok.com/live"); } });
         addMenuItem("Explore", new Runnable() { public void run() { go("https://www.tiktok.com/explore"); } });
@@ -644,6 +656,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (intent != null && intent.getStringExtra("webOnly") != null) webOnlyUser = intent.getStringExtra("webOnly");
         if (intent != null && intent.getData() != null) load(intent.getData().toString());
     }
 
@@ -663,6 +676,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        Tv.top = this;
         web.onResume();
         web.requestFocus();
     }
