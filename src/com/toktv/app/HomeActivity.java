@@ -165,10 +165,56 @@ public class HomeActivity extends Activity {
 
     // ---------------------------------------------------------------- Rendering
 
+    /** Where the focused card was: its section, its place in it and how far down the screen. */
+    private static final class Anchor {
+        String user, section;
+        int index, offset;
+        /** Pin/unpin: stay where you were (the neighbour now in that spot) instead of following the card. */
+        boolean stayInPlace;
+    }
+
+    /** Cards of each section, in screen order, from the last render. */
+    private final java.util.LinkedHashMap<String, List<View>> sections = new java.util.LinkedHashMap<>();
+    private String currentSection;
+
+    private Anchor anchorFor(View v) {
+        if (v == null || !(v.getTag() instanceof String) || ((String) v.getTag()).startsWith("#")) return null;
+        for (java.util.Map.Entry<String, List<View>> e : sections.entrySet()) {
+            int i = e.getValue().indexOf(v);
+            if (i < 0) continue;
+            Anchor a = new Anchor();
+            a.user = (String) v.getTag();
+            a.section = e.getKey();
+            a.index = i;
+            a.offset = topInList(v) - scroll.getScrollY();
+            return a;
+        }
+        return null;
+    }
+
+    private int topInList(View v) {
+        int y = 0;
+        while (v != null && v != list) {
+            y += v.getTop();
+            v = (View) v.getParent();
+        }
+        return y;
+    }
+
     private void render() {
+        render(anchorFor(getCurrentFocus()));
+    }
+
+    /**
+     * Rebuilds the list from the data already in memory (no network). With an anchor, the
+     * focused card (or the neighbour now in its spot) keeps its place on screen.
+     */
+    private void render(final Anchor anchor) {
         View f = getCurrentFocus();
         if (f != null && f.getTag() instanceof String) focusUser = (String) f.getTag();
+        stopPreview();
         list.removeAllViews();
+        sections.clear();
         View firstCard = null;
 
         boolean loggedIn = FeedLoader.loggedIn();
@@ -217,6 +263,7 @@ public class HomeActivity extends Activity {
             section("★ Pinned");
             List<Feed.Room> all = new ArrayList<>(pinLive);
             all.addAll(pinOff);
+            currentSection = "pinned";
             View v = grid(all, pinLive.size());
             if (firstCard == null && !pinLive.isEmpty()) firstCard = v;
         }
@@ -226,6 +273,7 @@ public class HomeActivity extends Activity {
             if (Feed.updatedAt > 0 && follow.isEmpty()) {
                 note(Feed.following.isEmpty() ? "Nobody you follow is LIVE right now." : "Everyone LIVE is in Pinned.");
             }
+            currentSection = "following";
             View v = grid(follow, follow.size());
             if (firstCard == null && v != null) firstCard = v;
         }
@@ -233,19 +281,59 @@ public class HomeActivity extends Activity {
         List<Feed.Room> sugg = picks.sorted(without(Feed.suggested, pins));
         if (!sugg.isEmpty()) {
             section("Recommended LIVE");
+            currentSection = "suggested";
             View v = grid(sugg, sugg.size());
             if (firstCard == null) firstCard = v;
         }
         List<Feed.Room> games = picks.sorted(without(Feed.gaming, pins));
         if (!games.isEmpty()) {
             section("🎮 Gaming LIVE");
+            currentSection = "gaming";
             View v = grid(games, games.size());
             if (firstCard == null) firstCard = v;
         }
 
-        View restore = focusUser == null ? null : list.findViewWithTag(focusUser);
-        if (restore != null) restore.requestFocus();
-        else if (firstCard != null) firstCard.requestFocus();
+        View target = null;
+        if (anchor != null) {
+            List<View> same = sections.get(anchor.section);
+            View card = list.findViewWithTag(anchor.user);
+            if (anchor.stayInPlace && same != null && !same.isEmpty()) {
+                // The card moved to another row: focus whoever is in its spot now.
+                target = same.get(Math.min(anchor.index, same.size() - 1));
+            } else if (card != null) {
+                target = card;
+            } else if (same != null && !same.isEmpty()) {
+                target = same.get(Math.min(anchor.index, same.size() - 1));
+            }
+        }
+        if (target == null && focusUser != null) target = list.findViewWithTag(focusUser);
+        if (target == null) target = firstCard;
+        if (target == null) return;
+        target.requestFocus();
+        if (anchor != null) keepOnScreen(target, anchor.offset);
+    }
+
+    /** After the next layout, scrolls so the view is offset px below the top, as it was before. */
+    private void keepOnScreen(final View v, final int offset) {
+        final android.view.ViewTreeObserver vto = scroll.getViewTreeObserver();
+        vto.addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                android.view.ViewTreeObserver o = scroll.getViewTreeObserver();
+                if (o.isAlive()) o.removeOnPreDrawListener(this);
+                if (v.getParent() == null) return true;
+                int y = topInList(v) - offset;
+                // Keep the whole card visible even if its spot moved a lot.
+                int h = scroll.getHeight();
+                int top = topInList(v);
+                if (h > 0) {
+                    y = Math.max(y, top + v.getHeight() + dp(16) - h);
+                    y = Math.min(y, Math.max(0, top - dp(16)));
+                }
+                scroll.scrollTo(0, Math.max(0, y));
+                return true;
+            }
+        });
     }
 
     private TextView bannerView;
@@ -318,71 +406,96 @@ public class HomeActivity extends Activity {
         return out;
     }
 
-    /** Three cards per row; the first liveCount rooms are LIVE, the rest are dimmed. Returns the first card. */
+    /** Cards per row (2.6: four smaller cards instead of three). */
+    private static final int PER_ROW = 4;
+    private static final int CARD_H = 92;    // dp (was 118)
+    private static final int MEDIA = 72;     // dp (was 78): cover picture, and the preview
+
+    /** PER_ROW cards per row; the first liveCount rooms are LIVE, the rest are dimmed. Returns the first card. */
     private View grid(List<Feed.Room> rooms, int liveCount) {
         View first = null;
         LinearLayout row = null;
+        List<View> cards = new ArrayList<>();
+        sections.put(currentSection, cards);
         for (int i = 0; i < rooms.size(); i++) {
-            if (i % 3 == 0) {
+            if (i % PER_ROW == 0) {
                 row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setClipChildren(false);
                 list.addView(row);
             }
-            View c = card(rooms.get(i));
+            View c = card(rooms.get(i), i < liveCount);
             if (i >= liveCount) c.setAlpha(0.45f);
             else order.put(rooms.get(i).user);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(118), 1f);
-            lp.setMargins(dp(8), dp(8), dp(8), dp(8));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(CARD_H), 1f);
+            lp.setMargins(dp(6), dp(6), dp(6), dp(6));
             row.addView(c, lp);
+            cards.add(c);
             if (first == null) first = c;
         }
         if (row != null) {
-            for (int k = rooms.size() % 3; k > 0 && k < 3; k++) {
+            for (int k = rooms.size() % PER_ROW; k > 0 && k < PER_ROW; k++) {
                 View spacer = new View(this);
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(118), 1f);
-                lp.setMargins(dp(8), dp(8), dp(8), dp(8));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(CARD_H), 1f);
+                lp.setMargins(dp(6), dp(6), dp(6), dp(6));
                 row.addView(spacer, lp);
             }
         }
         return first;
     }
 
-    private View card(final Feed.Room r) {
+    private View card(final Feed.Room r, final boolean live) {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.HORIZONTAL);
         c.setGravity(Gravity.CENTER_VERTICAL);
         c.setBackgroundResource(R.drawable.live_card_bg);
-        c.setPadding(dp(14), dp(10), dp(14), dp(10));
+        c.setPadding(dp(10), dp(8), dp(10), dp(8));
         c.setFocusable(true);
         c.setTag(r.user);
 
+        final FrameLayout media = new FrameLayout(this);
+        media.setBackgroundColor(Color.parseColor("#333333"));
         ImageView av = new ImageView(this);
         av.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        av.setBackgroundColor(Color.parseColor("#333333"));
-        c.addView(av, new LinearLayout.LayoutParams(dp(78), dp(78)));
+        media.addView(av, new FrameLayout.LayoutParams(-1, -1));
+        c.addView(media, new LinearLayout.LayoutParams(dp(MEDIA), dp(MEDIA)));
         // The stream's cover picture when there is one, else the avatar.
-        ImageLoader.load(av, r.cover != null ? r.cover : r.avatar, dp(78));
+        ImageLoader.load(av, r.cover != null ? r.cover : r.avatar, dp(MEDIA));
 
         LinearLayout texts = new LinearLayout(this);
         texts.setOrientation(LinearLayout.VERTICAL);
-        texts.setPadding(dp(14), 0, 0, 0);
-        TextView name = text((picks.isPinned(r.user) ? "★ " : "") + r.nick, 19, Color.WHITE, true);
+        texts.setPadding(dp(10), 0, 0, 0);
+        TextView name = text((picks.isPinned(r.user) ? "★ " : "") + r.nick, 16, Color.WHITE, true);
         name.setSingleLine(true);
         name.setEllipsize(TextUtils.TruncateAt.END);
         texts.addView(name);
-        TextView meta = text("@" + r.user + (r.viewers > 0 ? "  ·  " + count(r.viewers) + " watching" : ""), 14,
+        TextView meta = text(r.viewers > 0 ? count(r.viewers) + " watching" : "@" + r.user, 13,
                 Color.parseColor("#25F4EE"), false);
         meta.setSingleLine(true);
         meta.setEllipsize(TextUtils.TruncateAt.END);
         texts.addView(meta);
         if (r.title != null && r.title.length() > 0) {
-            TextView title = text(r.title, 14, Color.parseColor("#CCCCCC"), false);
+            TextView title = text(r.title, 13, Color.parseColor("#CCCCCC"), false);
             title.setMaxLines(2);
             title.setEllipsize(TextUtils.TruncateAt.END);
-            title.setPadding(0, dp(3), 0, 0);
+            title.setPadding(0, dp(2), 0, 0);
             texts.addView(title);
         }
         c.addView(texts, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        c.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean has) {
+                // A slight lift makes the focused card easy to spot from the couch.
+                v.animate().scaleX(has ? 1.05f : 1f).scaleY(has ? 1.05f : 1f).setDuration(120).start();
+                v.setTranslationZ(has ? dp(4) : 0);   // drawn above its neighbours while lifted
+                if (has) {
+                    if (live) schedulePreview(r.user, media);
+                } else if (r.user.equals(previewFor)) {
+                    stopPreview();
+                }
+            }
+        });
 
         c.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -407,6 +520,7 @@ public class HomeActivity extends Activity {
     // ---------------------------------------------------------------- Actions
 
     private void watch(String user) {
+        stopPreview();   // frees the video decoder for the player
         if (loader != null) { loader.cancel(); loader = null; spinner.setVisibility(View.GONE); }
         focusUser = user;
         Intent i = new Intent(this, LiveActivity.class);
@@ -422,11 +536,56 @@ public class HomeActivity extends Activity {
         return t.startsWith("#") ? null : t;   // "#search" etc. are UI tags, not users
     }
 
+    /**
+     * Pins or unpins without reloading anything or jumping to the top: the list is rebuilt from
+     * memory, the card moves to/from the Pinned row, and focus stays at the same spot on screen
+     * (on the card that took its place, or the card itself if its row is now empty).
+     */
     private void togglePin(String user) {
+        View card = list.findViewWithTag(user);
+        Anchor a = anchorFor(card != null ? card : getCurrentFocus());
         boolean now = picks.togglePin(user);
-        focusUser = user;
         toast(now ? "Pinned @" + user : "Unpinned @" + user);
-        render();
+        if (a != null) {
+            a.stayInPlace = true;
+            render(a);
+        } else {
+            render();
+        }
+    }
+
+    // ---------------------------------------------------------------- LIVE preview
+
+    private static final long PREVIEW_DELAY_MS = 1500;
+    private LivePreview preview;
+    private String previewFor;
+    private Runnable pendingPreview;
+
+    /** Rest on a card for a moment and it plays there (Settings → LIVE preview). */
+    private void schedulePreview(final String user, final FrameLayout media) {
+        stopPreview();
+        if (!"1".equals(prefs.get("live_preview", "0")) || !resumed) return;
+        previewFor = user;
+        pendingPreview = new Runnable() {
+            @Override
+            public void run() {
+                pendingPreview = null;
+                View f = getCurrentFocus();
+                if (!resumed || f == null || !user.equals(f.getTag()) || media.getParent() == null) return;
+                if (preview == null) preview = new LivePreview(HomeActivity.this);
+                preview.start(user, media);
+            }
+        };
+        ui.postDelayed(pendingPreview, PREVIEW_DELAY_MS);
+    }
+
+    private void stopPreview() {
+        if (pendingPreview != null) {
+            ui.removeCallbacks(pendingPreview);
+            pendingPreview = null;
+        }
+        previewFor = null;
+        if (preview != null) preview.stop();
     }
 
     private void cardOptions(final String user) {
@@ -612,12 +771,14 @@ public class HomeActivity extends Activity {
     protected void onPause() {
         super.onPause();
         resumed = false;
+        stopPreview();
         ui.removeCallbacks(autoRefresh);
     }
 
     @Override
     protected void onDestroy() {
         if (loader != null) loader.cancel();
+        stopPreview();
         ui.removeCallbacksAndMessages(null);
         if (isFinishing()) RemoteServer.get(this).stop();
         super.onDestroy();

@@ -57,6 +57,8 @@ public class SettingsActivity extends Activity {
                 new String[][]{{"16", "Small"}, {"18", "Medium"}, {"22", "Large"}, {"26", "Extra large"}});
         option("Show who joined", "\"name joined\" lines in chat.", "chat_joins", "0", Prefs.ONOFF);
         option("Profanity filter", "Masks swear words in chat. Off shows chat exactly as TikTok shows it.", "chat_filter", "0", Prefs.ONOFF);
+        option("LIVE preview", "Rest on a card in the LIVE list for a moment to see it play there (muted, low quality). Skipped when the Fire TV is low on memory.",
+                "live_preview", "0", Prefs.ONOFF);
         option("Went-LIVE alerts", "Banner on the LIVE list when a pinned creator goes LIVE.", "golive_alerts", "1", Prefs.ONOFF);
         option("Who's talking", "Blue box around the guest who is speaking in multi-guest LIVEs.",
                 "talk_highlight", "1", Prefs.ONOFF);

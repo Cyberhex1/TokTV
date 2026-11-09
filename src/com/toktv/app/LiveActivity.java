@@ -11,6 +11,8 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.util.Log;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -450,6 +452,7 @@ public class LiveActivity extends Activity {
         curNick = r.nickname;
         curTitle = r.title;
         curViewers = r.viewers;
+        if (chatPanel != null) chatPanel.setRoomId(user, r.roomId);
         if (r.nickname != null) infoName.setText(r.nickname + "  @" + user);
         if (r.title != null) infoTitle.setText(r.title);
         if (r.viewers > 0) infoViewers.setText(formatCount(r.viewers) + " watching");
@@ -535,8 +538,13 @@ public class LiveActivity extends Activity {
                 .setConnectTimeoutMs(10000)
                 .setReadTimeoutMs(15000);
         seiQueue.clear();
+        captureQueue.clear();
+        latencyMs = -1;
+        lastLatencyLog = 0;
+        setSpeed(1f);
         speakers.clear();
         com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.seiListener = seiListener;
+        com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.captureListener = captureListener;
         ui.removeCallbacks(seiTick);
         ui.post(seiTick);
         MediaSource src = new ProgressiveMediaSource.Factory(http, com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.FACTORY)
@@ -587,14 +595,89 @@ public class LiveActivity extends Activity {
                     seiQueue.poll();
                     speakers.apply((String) head[1]);
                 }
+                long[] cap;
+                while ((cap = captureQueue.peek()) != null && cap[0] <= pos) {
+                    captureQueue.poll();
+                    // How long ago the frame now on screen was filmed.
+                    latencyMs = System.currentTimeMillis() - cap[1];
+                    latencyAt = SystemClock.uptimeMillis();
+                }
+                if (++tickCount % 10 == 0) keepNearLive();
             }
             ui.postDelayed(this, 100);
         }
     };
 
+    // ---------------------------------------------------------------- Staying near live
+
+    /**
+     * TikTok's FLV server starts each connection with a few seconds of old video, and every
+     * stall adds more, so the picture drifts behind the LIVE (and its chat). Play slightly
+     * faster until it's back to a few seconds behind, and reconnect if it's hopelessly late.
+     */
+    private static final long TARGET_LATENCY_MS = 4500;   // filmed -> on screen
+    private static final long CATCH_UP_MS = 6500;         // start catching up above this
+    private static final long MIN_AHEAD_MS = 1200;        // never drain the buffer below this
+    private static final long RECONNECT_AHEAD_MS = 12000;
+    private final java.util.concurrent.ConcurrentLinkedQueue<long[]> captureQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private volatile long latencyMs = -1;
+    private long latencyAt, lastLatencyLog, tickCount, firstLatencyLogged = -1;
+    private float speed = 1f;
+
+    private final com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.CaptureListener captureListener =
+            new com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.CaptureListener() {
+                @Override
+                public void onCapture(long timeUs, long captureMs) {
+                    if (captureQueue.size() < 120) captureQueue.add(new long[]{timeUs, captureMs});
+                }
+            };
+
+    private void keepNearLive() {
+        if (exo == null || exo.getPlaybackState() != Player.STATE_READY) return;
+        long ahead = exo.getBufferedPosition() - exo.getCurrentPosition();
+        boolean fresh = latencyMs > 0 && SystemClock.uptimeMillis() - latencyAt < 5000;
+        if (ahead > RECONNECT_AHEAD_MS) {
+            Log.i("TokVideo", "reconnect: " + ahead + " ms buffered, latency " + latencyMs);
+            play(streamUrls.get(Math.min(streamAttempt, streamUrls.size() - 1)));
+            return;
+        }
+        float want;
+        if (ahead <= MIN_AHEAD_MS) want = 1f;
+        else if (fresh) {
+            if (latencyMs > CATCH_UP_MS + 3000) want = 1.25f;
+            else if (latencyMs > CATCH_UP_MS) want = 1.12f;
+            else if (latencyMs <= TARGET_LATENCY_MS) want = 1f;
+            else want = speed;   // between target and catch-up: keep going until target
+        } else {
+            // No timing info in this stream: keep the buffer itself short.
+            if (ahead > 4000) want = 1.2f;
+            else if (ahead > 2500) want = 1.1f;
+            else if (ahead <= 1800) want = 1f;
+            else want = speed;
+        }
+        setSpeed(want);
+        long now = SystemClock.uptimeMillis();
+        if (firstLatencyLogged < 0 && fresh) {
+            firstLatencyLogged = latencyMs;
+            Log.i("TokVideo", "start latency " + latencyMs + " ms (buffer " + ahead + " ms)");
+        }
+        if (now - lastLatencyLog > 5000) {
+            lastLatencyLog = now;
+            Log.i("TokVideo", "latency " + (fresh ? latencyMs + " ms" : "?") + " buffer " + ahead + " ms speed " + speed);
+        }
+    }
+
+    private void setSpeed(float s) {
+        if (exo == null || s == speed) return;
+        speed = s;
+        exo.setPlaybackParameters(new com.google.android.exoplayer2.PlaybackParameters(s));
+    }
+
     private void stopPlayback() {
         video.stopPlayback();
         if (exo != null) exo.stop();
+        captureQueue.clear();
+        firstLatencyLogged = -1;
     }
 
     private void tryNextStream() {
@@ -618,7 +701,7 @@ public class LiveActivity extends Activity {
         boolean live;
         /** TikTok said the room is over (status other than 2 = live). */
         boolean ended;
-        String nickname, title;
+        String nickname, title, roomId;
         long viewers;
         List<String> hls = new ArrayList<>();
     }
@@ -632,6 +715,7 @@ public class LiveActivity extends Activity {
             r.nickname = fr.nick;
             r.title = emptyToNull(fr.title);
             r.viewers = fr.viewers;
+            r.roomId = fr.roomId;
             r.live = true;
             addFromStreamData(fr.streamData, r);
             addUrl(r, fr.hls);
@@ -654,6 +738,7 @@ public class LiveActivity extends Activity {
                 parseUserRoom(data, r);
                 JSONObject usr = data.optJSONObject("user");
                 if (usr != null) roomId = usr.optString("roomId", null);
+                if (roomId != null && roomId.length() > 0 && !"0".equals(roomId)) r.roomId = roomId;
             }
         } catch (Exception ignored) {
         }
@@ -932,6 +1017,7 @@ public class LiveActivity extends Activity {
             exo = null;
         }
         com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.seiListener = null;
+        com.google.android.exoplayer2.extractor.flv.TokFlvExtractor.captureListener = null;
         ui.removeCallbacksAndMessages(null);
         if (chatPanel != null) chatPanel.close();
         super.onDestroy();

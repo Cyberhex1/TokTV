@@ -175,17 +175,55 @@ public final class TokFlvExtractor implements Extractor {
 
     public static volatile SeiListener seiListener;
 
+    /** TikTok's SEI carries "video_e2e_delay":{"capture_camera":<unix ms>}: when the frame was filmed. */
+    public interface CaptureListener {
+        void onCapture(long timeUs, long captureMs);
+    }
+
+    public static volatile CaptureListener captureListener;
+
+    private static final byte[] CAPTURE_KEY = "\"capture_camera\":".getBytes(java.nio.charset.Charset.forName("US-ASCII"));
+
+    static long findCapture(byte[] d, int start, int end) {
+        outer:
+        for (int i = start; i + CAPTURE_KEY.length + 13 <= end; i++) {
+            for (int k = 0; k < CAPTURE_KEY.length; k++) if (d[i + k] != CAPTURE_KEY[k]) continue outer;
+            long v = 0;
+            int digits = 0;
+            for (int j = i + CAPTURE_KEY.length; j < end && digits < 16; j++) {
+                byte c = d[j];
+                if (c == ' ' && digits == 0) continue;
+                if (c < '0' || c > '9') break;
+                v = v * 10 + (c - '0');
+                digits++;
+            }
+            return digits == 13 ? v : -1;
+        }
+        return -1;
+    }
+
     /** H.264 (codec 7) and HEVC (codec 12) video tags. */
     static final class VideoReader extends TagPayloadReader {
         private long lastSeiAt, lastLayoutAt;
 
+        private long lastCaptureAt;
+
         private void probeSei(ParsableByteArray data, int n, long timeUs) {
             SeiListener l = seiListener;
-            if (l == null || n < 16) return;
+            CaptureListener cl = captureListener;
+            if ((l == null && cl == null) || n < 16) return;
             byte b0 = data.getData()[data.getPosition()];
             boolean sei = codec == CODEC_HEVC ? ((b0 >> 1) & 0x3F) == 39 || ((b0 >> 1) & 0x3F) == 40 : (b0 & 0x1F) == 6;
             if (!sei) return;
             long now = System.currentTimeMillis();
+            if (cl != null && now - lastCaptureAt >= 1000) {
+                long cap = findCapture(data.getData(), data.getPosition(), data.getPosition() + n);
+                if (cap > 0) {
+                    lastCaptureAt = now;
+                    cl.onCapture(timeUs, cap);
+                }
+            }
+            if (l == null) return;
             boolean big = n > 600;   // layout messages are ~4 KB, talk-only ones ~200 bytes
             if (now - (big ? lastLayoutAt : lastSeiAt) < (big ? 400 : 150)) return;
             byte[] d = data.getData();

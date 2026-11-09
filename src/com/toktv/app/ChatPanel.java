@@ -34,6 +34,7 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.regex.Pattern;
 
 /**
@@ -213,12 +214,28 @@ public class ChatPanel {
         }
         sWeb.evaluateJavascript("window.__tvjoins=" + showJoins() + ";", null);
         if (user.equalsIgnoreCase(sUser)) {
-            // Same room as before: just replay the last lines.
-            sWeb.evaluateJavascript("window.__tvreplay&&__tvreplay()", null);
+            // Same room as before: just show the last lines again.
+            if (!sShown.isEmpty()) {
+                JSONArray a = new JSONArray();
+                for (JSONObject o : sShown) {
+                    JSONObject c = new JSONObject();   // without "c": not timed as new lines
+                    try { c.put("k", o.optString("k")).put("n", o.optString("n")).put("m", o.optString("m")); } catch (Exception ignored) { }
+                    a.put(c);
+                }
+                sShown.clear();
+                onLines(a.toString(), true);
+            } else {
+                sWeb.evaluateJavascript("window.__tvreplay&&__tvreplay()", null);
+            }
             return;
         }
         final String target = user;
         sUser = target;
+        sShown.clear();
+        sLeftRoomId = sRoomId;
+        sRoomId = 0;
+        wire = false;
+        sUi.removeCallbacks(wireCheck);
         if (sWeb.getUrl() != null && sWeb.getUrl().contains("/live")) {
             // The page is already running: switch rooms inside it (seconds) when it has a link to
             // this LIVE, otherwise load the room page.
@@ -260,6 +277,116 @@ public class ChatPanel {
         return "1".equals(prefs.get("chat_joins", "0"));
     }
 
+    // ---------------------------------------------------------------- Direct from the websocket
+
+    /** The room's id, so frames still arriving for the room we just left are dropped. */
+    private static long sRoomId, sLeftRoomId;
+    /** Lines shown for sUser, to show again when coming back to the same room. */
+    private static final LinkedList<JSONObject> sShown = new LinkedList<>();
+    /** Chat is coming straight from the websocket: the page's own chat list is ignored. */
+    private boolean wire;
+    private final java.util.LinkedHashMap<String, long[]> wireSeen = new java.util.LinkedHashMap<String, long[]>() {
+        @Override
+        protected boolean removeEldestEntry(java.util.Map.Entry<String, long[]> e) { return size() > 300; }
+    };
+    private final java.util.HashSet<Long> wireIds = new java.util.HashSet<>();
+    private final LinkedList<Long> wireIdOrder = new LinkedList<>();
+    private static final java.util.concurrent.ExecutorService sDecode = java.util.concurrent.Executors.newSingleThreadExecutor();
+
+    /** Called by the player once it knows the room id for user. */
+    public void setRoomId(String forUser, String roomId) {
+        if (forUser == null || !forUser.equalsIgnoreCase(sUser) || roomId == null) return;
+        try { sRoomId = Long.parseLong(roomId); } catch (NumberFormatException ignored) { }
+    }
+
+    /**
+     * Hooks the page's WebSocket before TikTok opens its LIVE connection and hands every binary
+     * frame from TikTok's LIVE message socket to the app as base64. Safe to run more than once.
+     */
+    static final String WS_HOOK =
+            "(function(){if(window.__tvws||!window.WebSocket||!window.TVChat||!TVChat.frame)return;window.__tvws=1;"
+            + "var OW=window.WebSocket;"
+            + "function b64(ab){var u=new Uint8Array(ab),s='',C=0x8000;for(var i=0;i<u.length;i+=C)s+=String.fromCharCode.apply(null,u.subarray(i,i+C));return btoa(s);}"
+            + "function hand(d,at){try{if(d instanceof ArrayBuffer)TVChat.frame(b64(d),at);"
+            + "else if(window.Blob&&d instanceof Blob){var r=new FileReader();r.onload=function(){TVChat.frame(b64(r.result),at);};r.readAsArrayBuffer(d);}}catch(e){}}"
+            + "function W(u,p){var s=arguments.length>1?new OW(u,p):new OW(u);"
+            + "try{if(/webcast|im\\/ws|ws_proxy/.test(String(u)))s.addEventListener('message',function(e){hand(e.data,Date.now());});}catch(e){}return s;}"
+            + "W.prototype=OW.prototype;W.CONNECTING=0;W.OPEN=1;W.CLOSING=2;W.CLOSED=3;window.WebSocket=W;"
+            // When the socket can't connect, the page polls /webcast/im/fetch/ instead: read those too.
+            + "var IM=/\\/webcast\\/im\\/fetch/;function resp(b,at){try{TVChat.resp(b64(b),at);}catch(e){}}"
+            + "var OF=window.fetch;if(OF)window.fetch=function(i){var p=OF.apply(this,arguments);"
+            + "try{var u=typeof i==='string'?i:(i&&i.url)||'';if(IM.test(u))p.then(function(r){var at=Date.now();"
+            + "r.clone().arrayBuffer().then(function(b){resp(b,at);});}).catch(function(){});}catch(e){}return p;};"
+            + "var XO=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){"
+            + "try{if(IM.test(String(u)))this.addEventListener('load',function(){var at=Date.now();"
+            + "try{if(this.response instanceof ArrayBuffer)resp(this.response,at);}catch(e){}});}catch(e){}"
+            + "return XO.apply(this,arguments);};})();";
+
+    private final Runnable wireCheck = new Runnable() {
+        @Override
+        public void run() { logLag(); }
+    };
+
+    /** Decoded websocket lines, on the UI thread. */
+    private void onWire(List<ChatWire.Line> got, long pageAt) {
+        if (!open || lines == null || got.isEmpty()) return;
+        JSONArray arr = new JSONArray();
+        for (ChatWire.Line l : got) {
+            if (sRoomId != 0 ? l.roomId != sRoomId : (sLeftRoomId != 0 && l.roomId == sLeftRoomId)) continue;
+            if (l.msgId != 0) {
+                if (!wireIds.add(l.msgId)) continue;
+                wireIdOrder.add(l.msgId);
+                if (wireIdOrder.size() > 500) wireIds.remove(wireIdOrder.removeFirst());
+            }
+            if ("chat-message".equals(l.kind)) {
+                wireSeen.put(l.name + "\n" + l.text.trim(), new long[]{l.createdAt, pageAt});
+                lagWirePage.add(pageAt - l.createdAt);
+            }
+            try {
+                JSONObject o = new JSONObject();
+                o.put("k", l.kind);
+                o.put("n", l.name);
+                o.put("m", l.text);
+                o.put("d", pageAt);
+                o.put("c", l.createdAt);
+                arr.put(o);
+            } catch (Exception ignored) { }
+        }
+        if (arr.length() == 0) return;
+        if (!wire) {
+            wire = true;
+            Log.i(TAG, "chat straight from the websocket (room " + got.get(0).roomId + ")");
+        }
+        onLines(arr.toString(), true);
+    }
+
+    // Lag samples (ms), logged every 15 s: how far behind TikTok's server each path is.
+    private final List<Long> lagWirePage = new java.util.ArrayList<>(), lagWireScreen = new java.util.ArrayList<>(),
+            lagDomAfterWire = new java.util.ArrayList<>(), lagDomScreen = new java.util.ArrayList<>();
+    private long lastLagLog;
+
+    private static String pct(List<Long> a) {
+        if (a.isEmpty()) return "n=0";
+        List<Long> s = new java.util.ArrayList<>(a);
+        java.util.Collections.sort(s);
+        return "n=" + s.size() + " p50=" + s.get(s.size() / 2) + " p90=" + s.get(Math.min(s.size() - 1, s.size() * 9 / 10))
+                + " max=" + s.get(s.size() - 1);
+    }
+
+    private void logLag() {
+        long now = SystemClock.uptimeMillis();
+        if (now - lastLagLog < 15000) return;
+        lastLagLog = now;
+        if (lagWirePage.isEmpty() && lagDomScreen.isEmpty() && lagDomAfterWire.isEmpty()) return;
+        Log.i(TAG, "LAG server->page(ws) " + pct(lagWirePage) + " | server->TV(ws) " + pct(lagWireScreen)
+                + " | ws->pageDOM " + pct(lagDomAfterWire) + " | server->TV(via DOM, old way) " + pct(lagDomScreen)
+                + (wire ? " [showing ws]" : " [showing DOM]"));
+        lagWirePage.clear();
+        lagWireScreen.clear();
+        lagDomAfterWire.clear();
+        lagDomScreen.clear();
+    }
+
     private static WebView createWeb(Activity a) {
         WebView w = new WebView(a.getApplicationContext());
         WebSettings s = w.getSettings();
@@ -291,10 +418,21 @@ public class ChatPanel {
             }
 
             @Override
+            public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) {
+                // As early as possible, before TikTok opens its LIVE socket.
+                v.evaluateJavascript(WS_HOOK, null);
+            }
+
+            @Override
+            public void onPageCommitVisible(WebView v, String url) {
+                v.evaluateJavascript(WS_HOOK, null);
+            }
+
+            @Override
             public void onPageFinished(WebView v, String url) {
                 ChatPanel p = sActive;
                 if (p != null) Log.i(TAG, "pageFinished +" + (SystemClock.uptimeMillis() - p.t0) + "ms");
-                v.evaluateJavascript(CHAT_JS, null);
+                v.evaluateJavascript(WS_HOOK + CHAT_JS, null);
             }
         });
         return w;
@@ -352,20 +490,66 @@ public class ChatPanel {
                 @Override
                 public void run() {
                     ChatPanel p = sActive;
-                    if (p != null) p.onLines(json);
+                    if (p != null) p.onLines(json, false);
+                }
+            });
+        }
+
+        /** One binary websocket frame (base64) and when the page received it. */
+        @JavascriptInterface
+        public void frame(final String b64, final double at) { decode(b64, at, true); }
+
+        /** One /webcast/im/fetch/ response (base64): the page's polling fallback. */
+        @JavascriptInterface
+        public void resp(final String b64, final double at) { decode(b64, at, false); }
+
+        private void decode(final String b64, final double at, final boolean frame) {
+            sDecode.execute(new Runnable() {
+                @Override
+                public void run() {
+                    byte[] raw;
+                    try { raw = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); } catch (Exception e) { return; }
+                    final List<ChatWire.Line> got = frame ? ChatWire.decodeFrame(raw) : ChatWire.decodeResponse(raw);
+                    if (got.isEmpty()) return;
+                    sUi.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            ChatPanel p = sActive;
+                            if (p != null) p.onWire(got, (long) at);
+                        }
+                    });
                 }
             });
         }
     }
 
-    private void onLines(String json) {
+    private void onLines(String json, boolean fromWire) {
         if (!open || lines == null) return;
         try {
             JSONArray arr = new JSONArray(json);
             if (arr.length() == 0) return;
             long now = System.currentTimeMillis();
+            if (!fromWire) {
+                // The page's own chat list: used only when the websocket isn't readable; otherwise
+                // it's just timed against the websocket (the old way, for the lag log).
+                JSONArray keep = new JSONArray();
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject o = arr.getJSONObject(i);
+                    if ("chat-message".equals(o.optString("k"))) {
+                        long[] w = wireSeen.get(o.optString("n") + "\n" + o.optString("m").trim());
+                        if (w != null) {
+                            lagDomAfterWire.add(o.optLong("d", now) - w[1]);
+                            lagDomScreen.add(now - w[0]);
+                        }
+                    }
+                    if (!wire) keep.put(o);
+                }
+                logLag();
+                if (keep.length() == 0) return;
+                arr = keep;
+            }
             if (!gotFirst) {
-                Log.i(TAG, "firstLines +" + (SystemClock.uptimeMillis() - t0) + "ms");
+                Log.i(TAG, "firstLines +" + (SystemClock.uptimeMillis() - t0) + "ms" + (fromWire ? " (websocket)" : " (page)"));
                 clearLines();
                 gotFirst = true;
             }
@@ -376,6 +560,11 @@ public class ChatPanel {
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.getJSONObject(i);
                 lag += now - o.optLong("d", now);
+                if (fromWire && o.optLong("c", 0) > 0 && "chat-message".equals(o.optString("k"))) {
+                    lagWireScreen.add(now - o.optLong("c"));
+                }
+                if (sShown.size() >= 30) sShown.removeFirst();
+                sShown.add(o);
                 String k = o.optString("k"), n = o.optString("n"), m = o.optString("m");
                 if (filter) m = Profanity.mask(m);
                 TextView v;
@@ -394,7 +583,7 @@ public class ChatPanel {
             }
             int extra = lines.getChildCount() - MAX_LINES;
             if (extra > 0) lines.removeViews(0, extra);
-            Log.i(TAG, "batch " + arr.length() + " pageToApp avg " + (lag / arr.length()) + "ms");
+            if (!fromWire) Log.i(TAG, "batch " + arr.length() + " pageToApp avg " + (lag / arr.length()) + "ms");
         } catch (Exception ignored) {
         }
     }
